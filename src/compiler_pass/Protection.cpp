@@ -18,7 +18,8 @@ using namespace llvm;
 #define DEBUG_TYPE ""
 
 /* Runttime Function List */
-#define __GEP_CHECK "__gep_check" // void* __gep_check(void*, void*, int64_t)
+#define __GEP_CHECK "__gep_check"         // void* __gep_check(void*, void*, int64_t)
+#define __BITCAST_CHECK "__bitcast_check" // void *__bitcast_check(void *, int64_t);
 
 namespace
 {
@@ -26,6 +27,7 @@ namespace
     {
         static unordered_set<string> ifunc = {
             __GEP_CHECK,
+            __BITCAST_CHECK,
         };
 
         return ifunc.count(name) != 0;
@@ -93,24 +95,36 @@ namespace
                     voidPointerType,
                     {voidPointerType, voidPointerType, int64Type},
                     false));
+
+            M->getOrInsertFunction(
+                __BITCAST_CHECK,
+                FunctionType::get(
+                    voidPointerType,
+                    {voidPointerType, int64Type},
+                    false));
         }
 
         void hookInstruction(Function &F)
         {
             SmallVector<GetElementPtrInst *, 16> gepInsts;
-            SmallVector<BitCastInst *, 16> bitcastInsts;
+            SmallVector<BitCastInst *, 16> bcInsts;
 
             for (BasicBlock &BB : F)
                 for (Instruction &I : BB)
                     if (GetElementPtrInst *gep = dyn_cast<GetElementPtrInst>(&I))
+                    {
                         gepInsts.push_back(gep);
-                    else if (BitCastInst *bitcast = dyn_cast<BitCastInst>(&I))
-                        bitcastInsts.push_back(bitcast);
+                    }
+                    else if (BitCastInst *bc = dyn_cast<BitCastInst>(&I))
+                    {
+                        if (bc->getSrcTy()->isPointerTy() && bc->getDestTy()->isPointerTy())
+                            bcInsts.push_back(bc);
+                    }
 
             for (auto gep : gepInsts)
                 addGepChecker(gep);
 
-            for (auto bc : bitcastInsts)
+            for (auto bc : bcInsts)
                 addBitcastChecker(bc);
         }
 
@@ -136,15 +150,44 @@ namespace
                 irBuilder.CreateCall(M->getFunction(__GEP_CHECK), {base, result, size}),
                 gep->getType());
 
-            gep->replaceUsesWithIf(masked, [result](Use &U)
-                                   { return U.getUser() != result; });
+            gep->replaceUsesWithIf(masked, [result, masked](Use &U)
+                                   { return U.getUser() != result && U.getUser() != masked; });
 
             gepHookCounter++;
         }
 
         void addBitcastChecker(BitCastInst *bc)
         {
+            /*
+                Before:
+                    %dst = bitcast %src ty1 ty2
 
+                After:
+                    %dst = bitcast %src ty1 ty2
+                    %masked = __bitcast_check(%dst, size)
+                    then replace all %dst with %masked
+            */
+
+            unsigned int srcSize = DL->getTypeAllocSize(bc->getSrcTy()->getPointerElementType());
+            unsigned int dstSize = DL->getTypeAllocSize(bc->getDestTy()->getPointerElementType());
+
+            // Optimization 1
+            if (srcSize <= dstSize)
+                return;
+
+            IRBuilder<> irBuilder(bc->getNextNode());
+
+            Value *ptr = irBuilder.CreatePointerCast(bc, voidPointerType);
+            Value *size = irBuilder.getInt64(dstSize);
+
+            Value *masked = irBuilder.CreatePointerCast(
+                irBuilder.CreateCall(M->getFunction(__BITCAST_CHECK), {ptr, size}),
+                bc->getType());
+
+            bc->replaceUsesWithIf(masked, [ptr, masked](Use &U)
+                                   { return U.getUser() != ptr && U.getUser() != masked; });
+
+            bitcastHookCounter++;
         }
     };
 }
