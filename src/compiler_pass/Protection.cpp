@@ -10,6 +10,7 @@
 #include "llvm/Support/raw_ostream.h"
 
 #include <string>
+#include <unordered_set>
 
 using namespace std;
 using namespace llvm;
@@ -21,6 +22,15 @@ using namespace llvm;
 
 namespace
 {
+    static bool isInternalFunction(string name)
+    {
+        static unordered_set<string> ifunc = {
+            __GEP_CHECK,
+        };
+
+        return ifunc.count(name) != 0;
+    }
+
     struct ProtectionPass : public ModulePass
     {
         static char ID;
@@ -36,20 +46,38 @@ namespace
 
         // Statistic
         int64_t gepHookCounter;
+        int64_t bitcastHookCounter;
 
         virtual bool runOnModule(Module &M)
         {
             this->M = &M;
             this->DL = &M.getDataLayout();
             this->gepHookCounter = 0;
+            this->bitcastHookCounter = 0;
 
             bindRuntime();
             for (auto &F : M)
             {
-                LLVM_DEBUG(dbgs() << "Hooking Function " << F.getName() << "\n");
-                hookGepInstruction(F);
+                if (!F.isIntrinsic() &&
+                    !isInternalFunction(F.getName()) &&
+                    F.getInstructionCount() > 0)
+                {
+                    dbgs() << "Hooking Function " << F.getName() << "\n";
+                    hookInstruction(F);
+                }
             }
+
+            report();
+
             return false;
+        }
+
+        void report()
+        {
+            dbgs() << "----------[ProtectionPass REPORT]----------\n";
+            dbgs() << "BitCast: " << bitcastHookCounter << "\n";
+            dbgs() << "GepElementPtr: " << gepHookCounter << "\n";
+            dbgs() << "-------------------------------------------\n";
         }
 
         void bindRuntime()
@@ -65,6 +93,25 @@ namespace
                     voidPointerType,
                     {voidPointerType, voidPointerType, int64Type},
                     false));
+        }
+
+        void hookInstruction(Function &F)
+        {
+            SmallVector<GetElementPtrInst *, 16> gepInsts;
+            SmallVector<BitCastInst *, 16> bitcastInsts;
+
+            for (BasicBlock &BB : F)
+                for (Instruction &I : BB)
+                    if (GetElementPtrInst *gep = dyn_cast<GetElementPtrInst>(&I))
+                        gepInsts.push_back(gep);
+                    else if (BitCastInst *bitcast = dyn_cast<BitCastInst>(&I))
+                        bitcastInsts.push_back(bitcast);
+
+            for (auto gep : gepInsts)
+                addGepChecker(gep);
+
+            for (auto bc : bitcastInsts)
+                addBitcastChecker(bc);
         }
 
         void addGepChecker(GetElementPtrInst *gep)
@@ -87,26 +134,17 @@ namespace
 
             Value *masked = irBuilder.CreatePointerCast(
                 irBuilder.CreateCall(M->getFunction(__GEP_CHECK), {base, result, size}),
-                gep->getType()
-            );
+                gep->getType());
 
             gep->replaceUsesWithIf(masked, [result](Use &U)
-                                      { return U.getUser() != result; });
+                                   { return U.getUser() != result; });
 
             gepHookCounter++;
         }
 
-        void hookGepInstruction(Function &F)
+        void addBitcastChecker(BitCastInst *bc)
         {
-            SmallVector<GetElementPtrInst *, 16> GepInsts;
 
-            for (BasicBlock &BB : F)
-                for (Instruction &I : BB)
-                    if (GetElementPtrInst *gep = dyn_cast<GetElementPtrInst>(&I))
-                        GepInsts.push_back(gep);
-
-            for (auto gep : GepInsts)
-                addGepChecker(gep);
         }
     };
 }
