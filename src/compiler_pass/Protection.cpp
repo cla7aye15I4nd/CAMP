@@ -113,7 +113,9 @@ namespace
                 for (Instruction &I : BB)
                     if (GetElementPtrInst *gep = dyn_cast<GetElementPtrInst>(&I))
                     {
-                        gepInsts.push_back(gep);
+                        // TODO: Simply ignoring it may cause some bugs
+                        if (gep->getType()->isPointerTy())
+                            gepInsts.push_back(gep);
                     }
                     else if (BitCastInst *bc = dyn_cast<BitCastInst>(&I))
                     {
@@ -168,6 +170,11 @@ namespace
                     then replace all %dst with %masked
             */
 
+            // TODO: Simply ignoring it may cause some bugs
+            if (!bc->getSrcTy()->getPointerElementType()->isSized() ||
+                !bc->getDestTy()->getPointerElementType()->isSized())
+                return;
+
             unsigned int srcSize = DL->getTypeAllocSize(bc->getSrcTy()->getPointerElementType());
             unsigned int dstSize = DL->getTypeAllocSize(bc->getDestTy()->getPointerElementType());
 
@@ -185,7 +192,7 @@ namespace
                 bc->getType());
 
             bc->replaceUsesWithIf(masked, [ptr, masked](Use &U)
-                                   { return U.getUser() != ptr && U.getUser() != masked; });
+                                  { return U.getUser() != ptr && U.getUser() != masked; });
 
             bitcastHookCounter++;
         }
