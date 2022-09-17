@@ -1,0 +1,17 @@
+#!/bin/bash
+
+set -e
+
+BASE="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )/../"
+
+if [ $# -eq 0 ]
+  then
+    echo "usage: $0 <input> [clang++ args...]"
+    exit 0
+fi
+
+exec clang++ -Xclang -load -Xclang ${BASE}/build/src/compiler_pass/libProtectionPass.so \
+        "$@" \
+        ${BASE}/build/src/runtime/libruntime.a \
+        -Qunused-arguments \
+        -Wpointer-arith
