@@ -15,6 +15,7 @@ extern "C"
 #endif
 
     void *__gep_check(void *, void *, int64_t);
+    void *__bitcast_check(void *, int64_t);
 
 #ifdef __cplusplus
 }
