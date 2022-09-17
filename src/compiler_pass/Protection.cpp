@@ -2,6 +2,7 @@
 #include "llvm/Pass.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/Transforms/IPO/PassManagerBuilder.h"
@@ -25,11 +26,22 @@ namespace
         static char ID;
         ProtectionPass() : ModulePass(ID) {}
 
+        // Context
         Module *M;
+        const DataLayout *DL;
+
+        // Type Utils
+        Type *int64Type;
+        Type *voidPointerType;
+
+        // Statistic
+        int64_t gepHookCounter;
 
         virtual bool runOnModule(Module &M)
         {
             this->M = &M;
+            this->DL = &M.getDataLayout();
+            this->gepHookCounter = 0;
 
             bindRuntime();
             for (auto &F : M)
@@ -43,8 +55,9 @@ namespace
         void bindRuntime()
         {
             LLVMContext &context = M->getContext();
-            Type *int64Type = Type::getInt64Ty(context);
-            Type *voidPointerType = Type::getInt8PtrTy(context, 0);
+
+            int64Type = Type::getInt64Ty(context);
+            voidPointerType = Type::getInt8PtrTy(context, 0);
 
             M->getOrInsertFunction(
                 __GEP_CHECK,
@@ -54,11 +67,36 @@ namespace
                     false));
         }
 
-        static void addChecker(GetElementPtrInst *gep)
+        void addGepChecker(GetElementPtrInst *gep)
         {
+            /*
+                Before:
+                    %result = gep %base %offset
+
+                After:
+                    %result  = gep %base %offset
+                    %masked = __gep_check(%base, %result, size)
+                    then replace all %result with %masked
+            */
+
+            IRBuilder<> irBuilder(gep->getNextNode());
+
+            Value *base = irBuilder.CreatePointerCast(gep->getPointerOperand(), voidPointerType);
+            Value *result = irBuilder.CreatePointerCast(gep, voidPointerType);
+            Value *size = irBuilder.getInt64(DL->getTypeAllocSize(gep->getResultElementType()));
+
+            Value *masked = irBuilder.CreatePointerCast(
+                irBuilder.CreateCall(M->getFunction(__GEP_CHECK), {base, result, size}),
+                gep->getType()
+            );
+
+            gep->replaceUsesWithIf(masked, [result](Use &U)
+                                      { return U.getUser() != result; });
+
+            gepHookCounter++;
         }
 
-        static void hookGepInstruction(Function &F)
+        void hookGepInstruction(Function &F)
         {
             SmallVector<GetElementPtrInst *, 16> GepInsts;
 
@@ -68,7 +106,7 @@ namespace
                         GepInsts.push_back(gep);
 
             for (auto gep : GepInsts)
-                addChecker(gep);
+                addGepChecker(gep);
         }
     };
 }
