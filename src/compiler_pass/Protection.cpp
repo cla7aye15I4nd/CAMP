@@ -56,16 +56,19 @@ namespace
         Type *voidPointerType;
 
         // Statistic
-        int64_t gepHookCounter;
-        int64_t bitcastHookCounter;
+        int64_t gepOptimizedCounter;
+        int64_t gepHookedCounter;
+
+        int64_t bitcastHookedCounter;
 
         virtual bool runOnModule(Module &M)
         {
             this->M = &M;
             this->DL = &M.getDataLayout();
 
-            this->gepHookCounter = 0;
-            this->bitcastHookCounter = 0;
+            this->gepOptimizedCounter = 0;
+            this->gepHookedCounter = 0;
+            this->bitcastHookedCounter = 0;
 
             bindRuntime();
             for (auto &F : M)
@@ -97,8 +100,11 @@ namespace
         void report()
         {
             dbgs() << "----------[ProtectionPass REPORT]----------\n";
-            dbgs() << "BitCast: " << bitcastHookCounter << "\n";
-            dbgs() << "GepElementPtr: " << gepHookCounter << "\n";
+            dbgs() << "[BitCast]\n";
+            dbgs() << "  Hooked: " << bitcastHookedCounter << "\n";
+            dbgs() << "[GepElementPtr] \n";
+            dbgs() << "  Optimized: " << gepOptimizedCounter << " \n";
+            dbgs() << "  Hooked: " << gepHookedCounter << " \n";            
             dbgs() << "-------------------------------------------\n";
         }
 
@@ -142,8 +148,10 @@ namespace
                         // TODO: Simply ignoring it may cause some bugs
                         if (gep->getType()->isPointerTy())
                         {
-                            if (isSafePointer(gep))
+                            if (isSafePointer(gep)) {
+                                gepOptimizedCounter++;
                                 continue;
+                            }
                             gepInsts.push_back(gep);
                         }
                     }
@@ -199,7 +207,7 @@ namespace
             gep->replaceUsesWithIf(masked, [result, masked](Use &U)
                                    { return U.getUser() != result && U.getUser() != masked; });
 
-            gepHookCounter++;
+            gepHookedCounter++;
         }
 
         void addBitcastChecker(BitCastInst *bc)
@@ -226,7 +234,7 @@ namespace
             bc->replaceUsesWithIf(masked, [ptr, masked](Use &U)
                                   { return U.getUser() != ptr && U.getUser() != masked; });
 
-            bitcastHookCounter++;
+            bitcastHookedCounter++;
         }
 
         bool isSafePointer(Value *addr)
@@ -249,6 +257,7 @@ namespace
                         sz - uint64_t(oft) >= typeSize)
                         return true;
                 }
+                
             }
 
             return false;
