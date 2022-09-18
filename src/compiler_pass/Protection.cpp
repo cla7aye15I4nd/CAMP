@@ -134,8 +134,7 @@ namespace
             this->TLI = &getAnalysis<TargetLibraryInfoWrapperPass>().getTLI(F);
 
             ObjectSizeOpts VisitorOpts;
-            // VisitorOpts.RoundToAlign = true;
-            // EvalOpts.EvalMode = ObjectSizeOpts::Mode::ExactUnderlyingSizeAndOffset;
+            VisitorOpts.RoundToAlign = true;
             this->OSOV = new ObjectSizeOffsetVisitor(*DL, TLI, M->getContext(), VisitorOpts);
 
             for (BasicBlock &BB : F)
