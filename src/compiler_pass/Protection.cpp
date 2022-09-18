@@ -5,7 +5,14 @@
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/LegacyPassManager.h"
+#include "llvm/IR/Dominators.h"
 #include "llvm/Transforms/IPO/PassManagerBuilder.h"
+#include "llvm/Analysis/TargetLibraryInfo.h"
+#include "llvm/Analysis/PostDominators.h"
+#include "llvm/Analysis/AliasAnalysis.h"
+#include "llvm/Analysis/LoopInfo.h"
+#include "llvm/Analysis/ScalarEvolution.h"
+#include "llvm/Analysis/MemoryBuiltins.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -42,6 +49,10 @@ namespace
         Module *M;
         const DataLayout *DL;
 
+        // Analysis
+        const TargetLibraryInfo *TLI;
+        ObjectSizeOffsetVisitor *OSOV;
+
         // Type Utils
         Type *int64Type;
         Type *voidPointerType;
@@ -54,6 +65,7 @@ namespace
         {
             this->M = &M;
             this->DL = &M.getDataLayout();
+
             this->gepHookCounter = 0;
             this->bitcastHookCounter = 0;
 
@@ -72,6 +84,16 @@ namespace
             report();
 
             return false;
+        }
+
+        void getAnalysisUsage(AnalysisUsage &AU) const override
+        {
+            AU.addRequired<DominatorTreeWrapperPass>();
+            AU.addRequired<TargetLibraryInfoWrapperPass>();
+            AU.addRequired<PostDominatorTreeWrapperPass>();
+            AU.addRequired<AAResultsWrapperPass>();
+            AU.addRequired<LoopInfoWrapperPass>();
+            AU.addRequired<ScalarEvolutionWrapperPass>();
         }
 
         void report()
@@ -109,18 +131,41 @@ namespace
             SmallVector<GetElementPtrInst *, 16> gepInsts;
             SmallVector<BitCastInst *, 16> bcInsts;
 
+            this->TLI = &getAnalysis<TargetLibraryInfoWrapperPass>().getTLI(F);
+
+            ObjectSizeOpts VisitorOpts;
+            // VisitorOpts.RoundToAlign = true;
+            // EvalOpts.EvalMode = ObjectSizeOpts::Mode::ExactUnderlyingSizeAndOffset;
+            this->OSOV = new ObjectSizeOffsetVisitor(*DL, TLI, M->getContext(), VisitorOpts);
+
             for (BasicBlock &BB : F)
                 for (Instruction &I : BB)
                     if (GetElementPtrInst *gep = dyn_cast<GetElementPtrInst>(&I))
                     {
                         // TODO: Simply ignoring it may cause some bugs
                         if (gep->getType()->isPointerTy())
+                        {
+                            if (isSafePointer(gep))
+                                continue;
                             gepInsts.push_back(gep);
+                        }
                     }
                     else if (BitCastInst *bc = dyn_cast<BitCastInst>(&I))
                     {
                         if (bc->getSrcTy()->isPointerTy() && bc->getDestTy()->isPointerTy())
+                        {
+                            // TODO: Simply ignoring it may cause some bugs
+                            if (!bc->getSrcTy()->getPointerElementType()->isSized() ||
+                                !bc->getDestTy()->getPointerElementType()->isSized())
+                                continue;
+
+                            unsigned int srcSize = DL->getTypeAllocSize(bc->getSrcTy()->getPointerElementType());
+                            unsigned int dstSize = DL->getTypeAllocSize(bc->getDestTy()->getPointerElementType());
+
+                            if (srcSize <= dstSize)
+                                continue;
                             bcInsts.push_back(bc);
+                        }
                     }
 
             for (auto gep : gepInsts)
@@ -170,22 +215,10 @@ namespace
                     then replace all %dst with %masked
             */
 
-            // TODO: Simply ignoring it may cause some bugs
-            if (!bc->getSrcTy()->getPointerElementType()->isSized() ||
-                !bc->getDestTy()->getPointerElementType()->isSized())
-                return;
-
-            unsigned int srcSize = DL->getTypeAllocSize(bc->getSrcTy()->getPointerElementType());
-            unsigned int dstSize = DL->getTypeAllocSize(bc->getDestTy()->getPointerElementType());
-
-            // Optimization 1
-            if (srcSize <= dstSize)
-                return;
-
             IRBuilder<> irBuilder(bc->getNextNode());
 
             Value *ptr = irBuilder.CreatePointerCast(bc, voidPointerType);
-            Value *size = irBuilder.getInt64(dstSize);
+            Value *size = irBuilder.getInt64(DL->getTypeAllocSize(bc->getDestTy()->getPointerElementType()));
 
             Value *masked = irBuilder.CreatePointerCast(
                 irBuilder.CreateCall(M->getFunction(__BITCAST_CHECK), {ptr, size}),
@@ -195,6 +228,30 @@ namespace
                                   { return U.getUser() != ptr && U.getUser() != masked; });
 
             bitcastHookCounter++;
+        }
+
+        bool isSafePointer(Value *addr)
+        {
+            uint32_t typeSize = DL->getTypeAllocSize(addr->getType()->getPointerElementType());
+            addr->print(errs());
+            errs() << "\n";
+
+            SizeOffsetType sizeOffset = OSOV->compute(addr);
+            if (OSOV->bothKnown(sizeOffset))
+            {
+
+                uint64_t size = sizeOffset.first.getZExtValue();
+                int64_t offset = sizeOffset.second.getSExtValue();
+
+                dbgs() << "size: " << size << "\n";
+                dbgs() << "offset: " << offset << "\n";
+
+                if (offset >= 0 && size >= uint64_t(offset) &&
+                    size - uint64_t(offset) >= typeSize)
+                    return true;
+            }
+
+            return false;
         }
     };
 }
