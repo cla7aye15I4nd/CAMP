@@ -1,4 +1,6 @@
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/StringRef.h"
+#include "llvm/ADT/StringSet.h"
 #include "llvm/Pass.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Function.h"
@@ -16,10 +18,6 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 
-#include <string>
-#include <unordered_set>
-
-using namespace std;
 using namespace llvm;
 
 #define DEBUG_TYPE ""
@@ -30,9 +28,9 @@ using namespace llvm;
 
 namespace
 {
-    static bool isInternalFunction(string name)
+    static bool isInternalFunction(StringRef name)
     {
-        static unordered_set<string> ifunc = {
+        static StringSet<> ifunc = {
             __GEP_CHECK,
             __BITCAST_CHECK,
         };
@@ -51,7 +49,7 @@ namespace
 
         // Analysis
         const TargetLibraryInfo *TLI;
-        ObjectSizeOffsetVisitor *OSOV;
+        ObjectSizeOffsetEvaluator *OSOE;
 
         // Type Utils
         Type *int64Type;
@@ -133,9 +131,9 @@ namespace
 
             this->TLI = &getAnalysis<TargetLibraryInfoWrapperPass>().getTLI(F);
 
-            ObjectSizeOpts VisitorOpts;
-            VisitorOpts.RoundToAlign = true;
-            this->OSOV = new ObjectSizeOffsetVisitor(*DL, TLI, M->getContext(), VisitorOpts);
+            ObjectSizeOpts EvalOpts;
+            EvalOpts.RoundToAlign = true;
+            this->OSOE = new ObjectSizeOffsetEvaluator(*DL, TLI, F.getContext(), EvalOpts);
 
             for (BasicBlock &BB : F)
                 for (Instruction &I : BB)
@@ -162,6 +160,8 @@ namespace
                             unsigned int dstSize = DL->getTypeAllocSize(bc->getDestTy()->getPointerElementType());
 
                             if (srcSize <= dstSize)
+                                continue;
+                            if (isSafePointer(bc))
                                 continue;
                             bcInsts.push_back(bc);
                         }
@@ -232,22 +232,23 @@ namespace
         bool isSafePointer(Value *addr)
         {
             uint32_t typeSize = DL->getTypeAllocSize(addr->getType()->getPointerElementType());
-            addr->print(errs());
-            errs() << "\n";
+            SizeOffsetEvalType sizeOffset = OSOE->compute(addr);
 
-            SizeOffsetType sizeOffset = OSOV->compute(addr);
-            if (OSOV->bothKnown(sizeOffset))
+            if (OSOE->bothKnown(sizeOffset))
             {
 
-                uint64_t size = sizeOffset.first.getZExtValue();
-                int64_t offset = sizeOffset.second.getSExtValue();
+                Value *size = sizeOffset.first;
+                Value *offset = sizeOffset.second;
 
-                dbgs() << "size: " << size << "\n";
-                dbgs() << "offset: " << offset << "\n";
+                if (isa<ConstantInt>(size) && isa<ConstantInt>(offset))
+                {
+                    uint64_t sz = dyn_cast<ConstantInt>(size)->getZExtValue();
+                    int64_t oft = dyn_cast<ConstantInt>(offset)->getSExtValue();
 
-                if (offset >= 0 && size >= uint64_t(offset) &&
-                    size - uint64_t(offset) >= typeSize)
-                    return true;
+                    if (oft >= 0 && sz >= uint64_t(oft) &&
+                        sz - uint64_t(oft) >= typeSize)
+                        return true;
+                }
             }
 
             return false;
