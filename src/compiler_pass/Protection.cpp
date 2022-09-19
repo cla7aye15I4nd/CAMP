@@ -19,13 +19,15 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <algorithm>
 using namespace llvm;
 
 #define DEBUG_TYPE ""
 
 /* Runttime Function List */
-#define __GEP_CHECK "__gep_check"         // void* __gep_check(void*, void*, int64_t)
-#define __BITCAST_CHECK "__bitcast_check" // void *__bitcast_check(void *, int64_t);
+#define __GEP_CHECK "__violet_gep_check"         // void* __gep_check(void*, void*, int64_t)
+#define __BITCAST_CHECK "__violet_bitcast_check" // void *__bitcast_check(void *, int64_t);
+#define __BUILTIN_CHECK "__violet_builtin_check" // __violet_builtin_check(void *, uint8_t, int64_t, int64_t);
 
 namespace
 {
@@ -44,6 +46,7 @@ namespace
         ObjectSizeOffsetEvaluator *OSOE;
 
         // Type Utils
+        Type *int1Type;
         Type *int64Type;
         Type *voidPointerType;
 
@@ -98,6 +101,7 @@ namespace
         void bindRuntime()
         {
             LLVMContext &context = M->getContext();
+            int1Type = Type::getInt1Ty(context);
             int64Type = Type::getInt64Ty(context);
             voidPointerType = Type::getInt8PtrTy(context, 0);
 
@@ -113,6 +117,13 @@ namespace
                 FunctionType::get(
                     voidPointerType,
                     {voidPointerType, int64Type},
+                    false));
+
+            M->getOrInsertFunction(
+                __BUILTIN_CHECK,
+                FunctionType::get(
+                    voidPointerType,
+                    {voidPointerType, int1Type, int64Type, int64Type},
                     false));
         }
 
@@ -134,7 +145,7 @@ namespace
                 dbgs() << "    [BitCast]\n";
                 dbgs() << "        Optimized: " << bitcastOptimized << " \n";
                 dbgs() << "        Runtime Check: " << bitcastRuntimeCheck << " \n";
-                dbgs() << "        Builtin Check: " << bitcastBuiltinCheck << " \n";                
+                dbgs() << "        Builtin Check: " << bitcastBuiltinCheck << " \n";
             }
             if (gepOptimized > 0 || gepRuntimeCheck > 0 || gepBuiltinCheck > 0)
             {
@@ -149,9 +160,9 @@ namespace
         void hookInstruction(Function &F)
         {
             SmallVector<GetElementPtrInst *, 16> runtimeCheckGep;
-            SmallVector<GetElementPtrInst *, 16> builtinCheckGep;
+            SmallVector<std::pair<GetElementPtrInst *, Value *>, 16> builtinCheckGep;
             SmallVector<BitCastInst *, 16> runtimeCheckBc;
-            SmallVector<BitCastInst *, 16> builtinCheckBc;
+            SmallVector<std::pair<BitCastInst *, Value *>, 16> builtinCheckBc;
 
             this->TLI = &getAnalysis<TargetLibraryInfoWrapperPass>().getTLI(F);
             this->SE = &getAnalysis<ScalarEvolutionWrapperPass>().getSE();
@@ -190,16 +201,16 @@ namespace
                         }
                     }
 
-            for (auto gep : runtimeCheckGep)
+            for (auto &gep : runtimeCheckGep)
             {
                 gepRuntimeCheck++;
                 addGepRuntimeCheck(gep);
             }
 
-            for (auto gep : builtinCheckGep)
+            for (auto &[gep, cond] : builtinCheckGep)
             {
                 gepBuiltinCheck++;
-                addBuiltinCheck(gep);
+                addBuiltinCheck(gep, cond);
             }
 
             for (auto bc : runtimeCheckBc)
@@ -208,22 +219,32 @@ namespace
                 addBitcastRuntimeCheck(bc);
             }
 
-            for (auto bc : builtinCheckBc)
+            for (auto &[bc, cond] : builtinCheckBc)
             {
                 bitcastBuiltinCheck++;
-                addBuiltinCheck(bc);
+                addBuiltinCheck(bc, cond);
             }
         }
 
-        void addBuiltinCheck(Instruction *I)
+        void addBuiltinCheck(Instruction *I, Value *cond)
         {
             /*
                 llvm/lib/Transforms/Instrumentation/BoundsChecking.cpp
             */
 
-            SizeOffsetEvalType sizeOffset = OSOE->compute(I);
-            Value *size = sizeOffset.first;
-            Value *offset = sizeOffset.second;
+            SizeOffsetEvalType SizeOffset = OSOE->compute(I);
+            IRBuilder<> irBuilder(I->getNextNode());
+
+            Value *ptr = irBuilder.CreatePointerCast(I, voidPointerType);
+            Value *size = SizeOffset.first;
+            Value *offset = SizeOffset.second;
+
+            Value *masked = irBuilder.CreatePointerCast(
+                irBuilder.CreateCall(M->getFunction(__BUILTIN_CHECK), {ptr, cond, size, offset}),
+                I->getType());
+
+            I->replaceUsesWithIf(masked, [ptr, masked](Use &U)
+                                 { return U.getUser() != ptr && U.getUser() != masked; });
         }
 
         void addGepRuntimeCheck(GetElementPtrInst *gep)
@@ -276,11 +297,11 @@ namespace
                 bc->getType());
 
             bc->replaceUsesWithIf(masked, [ptr, masked](Use &U)
-                                  { return U.getUser() != ptr && U.getUser() != masked; });            
+                                  { return U.getUser() != ptr && U.getUser() != masked; });
         }
 
         template <typename T, unsigned N>
-        bool allocateChecker(T Ptr, SmallVector<T, N> &runtimeCheck, SmallVector<T, N> &builtinCheck)
+        bool allocateChecker(T Ptr, SmallVector<T, N> &runtimeCheck, SmallVector<std::pair<T, Value *>, N> &builtinCheck)
         {
             Value *Or = getBoundsCheckCond(Ptr);
             if (Or == nullptr)
@@ -296,11 +317,11 @@ namespace
                     return false;
             }
 
-            builtinCheck.push_back(Ptr);
+            builtinCheck.push_back(std::make_pair(Ptr, Or));
             return true;
         }
 
-        Value *getBoundsCheckCond(Instruction* Ptr)
+        Value *getBoundsCheckCond(Instruction *Ptr)
         {
             assert(Ptr->getType()->isPointerTy() && "getBoundsCheckCond(): Ptr should be pointer type");
             uint32_t NeededSize = DL->getTypeAllocSize(Ptr->getType()->getPointerElementType());
