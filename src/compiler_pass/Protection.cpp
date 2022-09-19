@@ -317,7 +317,9 @@ namespace
                     return false;
             }
 
-            builtinCheck.push_back(std::make_pair(Ptr, Or));
+            // FIXME: The bounds checking has some wired bugs
+            // builtinCheck.push_back(std::make_pair(Ptr, Or));
+            runtimeCheck.push_back(Ptr);
             return true;
         }
 
