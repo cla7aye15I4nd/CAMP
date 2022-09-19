@@ -15,6 +15,7 @@
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/Analysis/MemoryBuiltins.h"
+#include "llvm/Analysis/TargetFolder.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -39,7 +40,7 @@ namespace
 
         // Analysis
         const TargetLibraryInfo *TLI;
-        const ScalarEvolution *SE;
+        ScalarEvolution *SE;
         ObjectSizeOffsetEvaluator *OSOE;
 
         // Type Utils
@@ -50,6 +51,8 @@ namespace
         int64_t gepOptimized;
         int64_t gepRuntimeCheck;
         int64_t gepBuiltinCheck;
+        int64_t bitcastOptimized;
+        int64_t bitcastBuiltinCheck;
         int64_t bitcastRuntimeCheck;
 
         StringRef getPassName() const override
@@ -70,6 +73,8 @@ namespace
                 gepOptimized = 0;
                 gepRuntimeCheck = 0;
                 gepBuiltinCheck = 0;
+                bitcastOptimized = 0;
+                bitcastBuiltinCheck = 0;
                 bitcastRuntimeCheck = 0;
 
                 bindRuntime();
@@ -124,10 +129,12 @@ namespace
         void report(Function &F)
         {
             dbgs() << "[REPORT:" << F.getName() << "]\n";
-            if (bitcastRuntimeCheck > 0)
+            if (bitcastOptimized > 0 || bitcastRuntimeCheck > 0 || bitcastBuiltinCheck > 0)
             {
                 dbgs() << "    [BitCast]\n";
-                dbgs() << "        Hooked: " << bitcastRuntimeCheck << "\n";
+                dbgs() << "        Optimized: " << bitcastOptimized << " \n";
+                dbgs() << "        Runtime Check: " << bitcastRuntimeCheck << " \n";
+                dbgs() << "        Builtin Check: " << bitcastBuiltinCheck << " \n";                
             }
             if (gepOptimized > 0 || gepRuntimeCheck > 0 || gepBuiltinCheck > 0)
             {
@@ -141,8 +148,10 @@ namespace
 
         void hookInstruction(Function &F)
         {
-            SmallVector<GetElementPtrInst *, 16> gepInsts;
-            SmallVector<BitCastInst *, 16> bcInsts;
+            SmallVector<GetElementPtrInst *, 16> runtimeCheckGep;
+            SmallVector<GetElementPtrInst *, 16> builtinCheckGep;
+            SmallVector<BitCastInst *, 16> runtimeCheckBc;
+            SmallVector<BitCastInst *, 16> builtinCheckBc;
 
             this->TLI = &getAnalysis<TargetLibraryInfoWrapperPass>().getTLI(F);
             this->SE = &getAnalysis<ScalarEvolutionWrapperPass>().getSE();
@@ -158,12 +167,8 @@ namespace
                         // TODO: Simply ignoring it may cause some bugs
                         if (gep->getType()->isPointerTy())
                         {
-                            if (isSafePointer(gep))
-                            {
+                            if (!allocateChecker(gep, runtimeCheckGep, builtinCheckGep))
                                 gepOptimized++;
-                                continue;
-                            }
-                            gepInsts.push_back(gep);
                         }
                     }
                     else if (BitCastInst *bc = dyn_cast<BitCastInst>(&I))
@@ -180,40 +185,43 @@ namespace
 
                             if (srcSize <= dstSize)
                                 continue;
-                            if (isSafePointer(bc))
-                                continue;
-                            bcInsts.push_back(bc);
+                            if (!allocateChecker(bc, runtimeCheckBc, builtinCheckBc))
+                                bitcastOptimized++;
                         }
                     }
 
-            for (auto gep : gepInsts)
-                addGepChecker(gep);
-
-            for (auto bc : bcInsts)
-                addBitcastChecker(bc);
-        }
-
-        void addGepChecker(GetElementPtrInst *gep)
-        {
-            if (OSOE->bothKnown(OSOE->compute(gep)))
+            for (auto gep : runtimeCheckGep)
             {
-                addGepBuiltinCheck(gep);
-                gepBuiltinCheck++;
-            }
-            else
-            {
-                addGepRuntimeCheck(gep);
                 gepRuntimeCheck++;
+                addGepRuntimeCheck(gep);
+            }
+
+            for (auto gep : builtinCheckGep)
+            {
+                gepBuiltinCheck++;
+                addBuiltinCheck(gep);
+            }
+
+            for (auto bc : runtimeCheckBc)
+            {
+                bitcastRuntimeCheck++;
+                addBitcastRuntimeCheck(bc);
+            }
+
+            for (auto bc : builtinCheckBc)
+            {
+                bitcastBuiltinCheck++;
+                addBuiltinCheck(bc);
             }
         }
 
-        void addGepBuiltinCheck(GetElementPtrInst *gep)
+        void addBuiltinCheck(Instruction *I)
         {
             /*
                 llvm/lib/Transforms/Instrumentation/BoundsChecking.cpp
             */
 
-            SizeOffsetEvalType sizeOffset = OSOE->compute(gep);
+            SizeOffsetEvalType sizeOffset = OSOE->compute(I);
             Value *size = sizeOffset.first;
             Value *offset = sizeOffset.second;
         }
@@ -230,7 +238,7 @@ namespace
                     then replace all %result with %masked
             */
 
-            uint32_t typeSize = DL->getTypeAllocSize(gep->getType()->getPointerElementType());
+            uint64_t typeSize = DL->getTypeAllocSize(gep->getType()->getPointerElementType());
 
             IRBuilder<> irBuilder(gep->getNextNode());
 
@@ -246,7 +254,7 @@ namespace
                                    { return U.getUser() != result && U.getUser() != masked; });
         }
 
-        void addBitcastChecker(BitCastInst *bc)
+        void addBitcastRuntimeCheck(BitCastInst *bc)
         {
             /*
                 Before:
@@ -268,34 +276,76 @@ namespace
                 bc->getType());
 
             bc->replaceUsesWithIf(masked, [ptr, masked](Use &U)
-                                  { return U.getUser() != ptr && U.getUser() != masked; });
-
-            bitcastRuntimeCheck++;
+                                  { return U.getUser() != ptr && U.getUser() != masked; });            
         }
 
-        bool isSafePointer(Value *addr)
+        template <typename T, unsigned N>
+        bool allocateChecker(T Ptr, SmallVector<T, N> &runtimeCheck, SmallVector<T, N> &builtinCheck)
         {
-            uint32_t typeSize = DL->getTypeAllocSize(addr->getType()->getPointerElementType());
-
-            SizeOffsetEvalType sizeOffset = OSOE->compute(addr);
-
-            Value *size = sizeOffset.first;
-            Value *offset = sizeOffset.second;
-
-            if (OSOE->bothKnown(sizeOffset))
+            Value *Or = getBoundsCheckCond(Ptr);
+            if (Or == nullptr)
             {
-                if (isa<ConstantInt>(size) && isa<ConstantInt>(offset))
-                {
-                    uint64_t sz = dyn_cast<ConstantInt>(size)->getZExtValue();
-                    int64_t oft = dyn_cast<ConstantInt>(offset)->getSExtValue();
-
-                    if (oft >= 0 && sz >= uint64_t(oft) &&
-                        sz - uint64_t(oft) >= typeSize)
-                        return true;
-                }
+                runtimeCheck.push_back(Ptr);
+                return true;
             }
 
-            return false;
+            ConstantInt *C = dyn_cast_or_null<ConstantInt>(Or);
+            if (C)
+            {
+                if (!C->getZExtValue())
+                    return false;
+            }
+
+            builtinCheck.push_back(Ptr);
+            return true;
+        }
+
+        Value *getBoundsCheckCond(Instruction* Ptr)
+        {
+            assert(Ptr->getType()->isPointerTy() && "getBoundsCheckCond(): Ptr should be pointer type");
+            uint32_t NeededSize = DL->getTypeAllocSize(Ptr->getType()->getPointerElementType());
+            IRBuilder<TargetFolder> IRB(Ptr->getParent(), BasicBlock::iterator(Ptr), TargetFolder(*DL));
+
+            SizeOffsetEvalType SizeOffset = OSOE->compute(Ptr);
+            if (!OSOE->bothKnown(SizeOffset))
+                return nullptr;
+
+            Value *Size = SizeOffset.first;
+            Value *Offset = SizeOffset.second;
+            ConstantInt *SizeCI = dyn_cast<ConstantInt>(Size);
+
+            Type *IntTy = DL->getIntPtrType(Ptr->getType());
+            Value *NeededSizeVal = ConstantInt::get(IntTy, NeededSize);
+
+            auto SizeRange = SE->getUnsignedRange(SE->getSCEV(Size));
+            auto OffsetRange = SE->getUnsignedRange(SE->getSCEV(Offset));
+            auto NeededSizeRange = SE->getUnsignedRange(SE->getSCEV(NeededSizeVal));
+
+            // three checks are required to ensure safety:
+            // . Offset >= 0  (since the offset is given from the base ptr)
+            // . Size >= Offset  (unsigned)
+            // . Size - Offset >= NeededSize  (unsigned)
+            //
+            // optimization: if Size >= 0 (signed), skip 1st check
+            // FIXME: add NSW/NUW here?  -- we dont care if the subtraction overflows
+            Value *ObjSize = IRB.CreateSub(Size, Offset);
+            Value *Cmp2 = SizeRange.getUnsignedMin().uge(OffsetRange.getUnsignedMax())
+                              ? ConstantInt::getFalse(Ptr->getContext())
+                              : IRB.CreateICmpULT(Size, Offset);
+            Value *Cmp3 = SizeRange.sub(OffsetRange)
+                                  .getUnsignedMin()
+                                  .uge(NeededSizeRange.getUnsignedMax())
+                              ? ConstantInt::getFalse(Ptr->getContext())
+                              : IRB.CreateICmpULT(ObjSize, NeededSizeVal);
+            Value *Or = IRB.CreateOr(Cmp2, Cmp3);
+            if ((!SizeCI || SizeCI->getValue().slt(0)) &&
+                !SizeRange.getSignedMin().isNonNegative())
+            {
+                Value *Cmp1 = IRB.CreateICmpSLT(Offset, ConstantInt::get(IntTy, 0));
+                Or = IRB.CreateOr(Cmp1, Or);
+            }
+
+            return Or;
         }
     };
 }
