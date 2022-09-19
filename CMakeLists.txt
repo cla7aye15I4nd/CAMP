@@ -1,9 +1,7 @@
 cmake_minimum_required(VERSION 3.10)
 project(violet-pass)
 
-if ( _cpp_17_flag_supported )
-    set( CMAKE_CXX_STANDARD 17 )
-endif()
+set(CMAKE_CXX_STANDARD 17)
 
 find_package(LLVM REQUIRED CONFIG)
 
