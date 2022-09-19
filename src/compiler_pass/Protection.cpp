@@ -28,27 +28,18 @@ using namespace llvm;
 
 namespace
 {
-    static bool isInternalFunction(StringRef name)
-    {
-        static StringSet<> ifunc = {
-            __GEP_CHECK,
-            __BITCAST_CHECK,
-        };
-
-        return ifunc.count(name) != 0;
-    }
-
-    struct ProtectionPass : public ModulePass
+    struct VProtectionPass : public FunctionPass
     {
         static char ID;
-        ProtectionPass() : ModulePass(ID) {}
+        VProtectionPass() : FunctionPass(ID) {}
 
-        // Context
+        // Basic
         Module *M;
         const DataLayout *DL;
 
         // Analysis
         const TargetLibraryInfo *TLI;
+        const ScalarEvolution *SE;
         ObjectSizeOffsetEvaluator *OSOE;
 
         // Type Utils
@@ -56,64 +47,52 @@ namespace
         Type *voidPointerType;
 
         // Statistic
-        int64_t gepOptimized;        
+        int64_t gepOptimized;
         int64_t gepRuntimeCheck;
         int64_t gepBuiltinCheck;
         int64_t bitcastRuntimeCheck;
 
-        virtual bool runOnModule(Module &M)
+        StringRef getPassName() const override
         {
-            this->M = &M;
-            this->DL = &M.getDataLayout();
+            return "VProtectionPass";
+        }
 
-            this->gepOptimized = 0;
-            this->gepRuntimeCheck = 0;
-            this->gepBuiltinCheck = 0;
-            this->bitcastRuntimeCheck = 0;
-
-            bindRuntime();
-            for (auto &F : M)
+        bool runOnFunction(Function &F) override
+        {
+            if (!F.isIntrinsic() &&
+                !isInternalFunction(F.getName()) &&
+                F.getInstructionCount() > 0)
             {
-                if (!F.isIntrinsic() &&
-                    !isInternalFunction(F.getName()) &&
-                    F.getInstructionCount() > 0)
-                {
-                    dbgs() << "Hooking Function " << F.getName() << "\n";
-                    hookInstruction(F);
-                }
+
+                M = F.getParent();
+                DL = &M->getDataLayout();
+
+                gepOptimized = 0;
+                gepRuntimeCheck = 0;
+                gepBuiltinCheck = 0;
+                bitcastRuntimeCheck = 0;
+
+                bindRuntime();
+                hookInstruction(F);
+
+                report(F);
             }
-
-            report();
-
             return false;
         }
 
-        void getAnalysisUsage(AnalysisUsage &AU) const override
+        static bool isInternalFunction(StringRef name)
         {
-            AU.addRequired<DominatorTreeWrapperPass>();
-            AU.addRequired<TargetLibraryInfoWrapperPass>();
-            AU.addRequired<PostDominatorTreeWrapperPass>();
-            AU.addRequired<AAResultsWrapperPass>();
-            AU.addRequired<LoopInfoWrapperPass>();
-            AU.addRequired<ScalarEvolutionWrapperPass>();
-        }
+            static StringSet<> ifunc = {
+                __GEP_CHECK,
+                __BITCAST_CHECK,
+            };
 
-        void report()
-        {
-            dbgs() << "----------[ProtectionPass REPORT]----------\n";
-            dbgs() << "[BitCast]\n";
-            dbgs() << "  Hooked: " << bitcastRuntimeCheck << "\n";
-            dbgs() << "[GepElementPtr] \n";
-            dbgs() << "  Optimized: " << gepOptimized << " \n";
-            dbgs() << "  Runtime Check: " << gepRuntimeCheck << " \n";
-            dbgs() << "  Builtin Check: " << gepBuiltinCheck << " \n";
-            dbgs() << "-------------------------------------------\n";
+            return ifunc.count(name) != 0;
         }
 
         void bindRuntime()
         {
             LLVMContext &context = M->getContext();
-
             int64Type = Type::getInt64Ty(context);
             voidPointerType = Type::getInt8PtrTy(context, 0);
 
@@ -132,12 +111,41 @@ namespace
                     false));
         }
 
+        void getAnalysisUsage(AnalysisUsage &AU) const override
+        {
+            AU.addRequired<DominatorTreeWrapperPass>();
+            AU.addRequired<TargetLibraryInfoWrapperPass>();
+            AU.addRequired<PostDominatorTreeWrapperPass>();
+            AU.addRequired<AAResultsWrapperPass>();
+            AU.addRequired<LoopInfoWrapperPass>();
+            AU.addRequired<ScalarEvolutionWrapperPass>();
+        }
+
+        void report(Function &F)
+        {
+            dbgs() << "[REPORT:" << F.getName() << "]\n";
+            if (bitcastRuntimeCheck > 0)
+            {
+                dbgs() << "    [BitCast]\n";
+                dbgs() << "        Hooked: " << bitcastRuntimeCheck << "\n";
+            }
+            if (gepOptimized > 0 || gepRuntimeCheck > 0 || gepBuiltinCheck > 0)
+            {
+
+                dbgs() << "    [GepElementPtr] \n";
+                dbgs() << "        Optimized: " << gepOptimized << " \n";
+                dbgs() << "        Runtime Check: " << gepRuntimeCheck << " \n";
+                dbgs() << "        Builtin Check: " << gepBuiltinCheck << " \n";
+            }
+        }
+
         void hookInstruction(Function &F)
         {
             SmallVector<GetElementPtrInst *, 16> gepInsts;
             SmallVector<BitCastInst *, 16> bcInsts;
 
             this->TLI = &getAnalysis<TargetLibraryInfoWrapperPass>().getTLI(F);
+            this->SE = &getAnalysis<ScalarEvolutionWrapperPass>().getSE();
 
             ObjectSizeOpts EvalOpts;
             EvalOpts.RoundToAlign = true;
@@ -187,6 +195,31 @@ namespace
 
         void addGepChecker(GetElementPtrInst *gep)
         {
+            if (OSOE->bothKnown(OSOE->compute(gep)))
+            {
+                addGepBuiltinCheck(gep);
+                gepBuiltinCheck++;
+            }
+            else
+            {
+                addGepRuntimeCheck(gep);
+                gepRuntimeCheck++;
+            }
+        }
+
+        void addGepBuiltinCheck(GetElementPtrInst *gep)
+        {
+            /*
+                llvm/lib/Transforms/Instrumentation/BoundsChecking.cpp
+            */
+
+            SizeOffsetEvalType sizeOffset = OSOE->compute(gep);
+            Value *size = sizeOffset.first;
+            Value *offset = sizeOffset.second;
+        }
+
+        void addGepRuntimeCheck(GetElementPtrInst *gep)
+        {
             /*
                 Before:
                     %result = gep %base %offset
@@ -197,11 +230,13 @@ namespace
                     then replace all %result with %masked
             */
 
+            uint32_t typeSize = DL->getTypeAllocSize(gep->getType()->getPointerElementType());
+
             IRBuilder<> irBuilder(gep->getNextNode());
 
             Value *base = irBuilder.CreatePointerCast(gep->getPointerOperand(), voidPointerType);
             Value *result = irBuilder.CreatePointerCast(gep, voidPointerType);
-            Value *size = irBuilder.getInt64(DL->getTypeAllocSize(gep->getResultElementType()));
+            Value *size = irBuilder.getInt64(typeSize);
 
             Value *masked = irBuilder.CreatePointerCast(
                 irBuilder.CreateCall(M->getFunction(__GEP_CHECK), {base, result, size}),
@@ -209,8 +244,6 @@ namespace
 
             gep->replaceUsesWithIf(masked, [result, masked](Use &U)
                                    { return U.getUser() != result && U.getUser() != masked; });
-
-            gepRuntimeCheck++;
         }
 
         void addBitcastChecker(BitCastInst *bc)
@@ -267,19 +300,15 @@ namespace
     };
 }
 
-char ProtectionPass::ID = 0;
+// char VGlobalsMetadataWrapperPass::ID = 0;
+char VProtectionPass::ID = 0;
 
-static void registerProtectionPass(const PassManagerBuilder &,
-                                   legacy::PassManagerBase &PM)
+static void registerPass(const PassManagerBuilder &,
+                         legacy::PassManagerBase &PM)
 {
-    static ProtectionPass *pass = nullptr;
-    if (pass == nullptr)
-        PM.add(pass = new ProtectionPass());
+    PM.add(new VProtectionPass());
 }
 
 static RegisterStandardPasses
-    RegisterMyPass0(PassManagerBuilder::EP_OptimizerLast,
-                    registerProtectionPass);
-static RegisterStandardPasses
-    RegisterMyPass1(PassManagerBuilder::EP_EnabledOnOptLevel0,
-                    registerProtectionPass);
+    RegisterMyPass(PassManagerBuilder::EP_OptimizerLast,
+                   registerPass);
