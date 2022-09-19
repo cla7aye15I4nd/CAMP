@@ -56,19 +56,20 @@ namespace
         Type *voidPointerType;
 
         // Statistic
-        int64_t gepOptimizedCounter;
-        int64_t gepHookedCounter;
-
-        int64_t bitcastHookedCounter;
+        int64_t gepOptimized;        
+        int64_t gepRuntimeCheck;
+        int64_t gepBuiltinCheck;
+        int64_t bitcastRuntimeCheck;
 
         virtual bool runOnModule(Module &M)
         {
             this->M = &M;
             this->DL = &M.getDataLayout();
 
-            this->gepOptimizedCounter = 0;
-            this->gepHookedCounter = 0;
-            this->bitcastHookedCounter = 0;
+            this->gepOptimized = 0;
+            this->gepRuntimeCheck = 0;
+            this->gepBuiltinCheck = 0;
+            this->bitcastRuntimeCheck = 0;
 
             bindRuntime();
             for (auto &F : M)
@@ -101,10 +102,11 @@ namespace
         {
             dbgs() << "----------[ProtectionPass REPORT]----------\n";
             dbgs() << "[BitCast]\n";
-            dbgs() << "  Hooked: " << bitcastHookedCounter << "\n";
+            dbgs() << "  Hooked: " << bitcastRuntimeCheck << "\n";
             dbgs() << "[GepElementPtr] \n";
-            dbgs() << "  Optimized: " << gepOptimizedCounter << " \n";
-            dbgs() << "  Hooked: " << gepHookedCounter << " \n";            
+            dbgs() << "  Optimized: " << gepOptimized << " \n";
+            dbgs() << "  Runtime Check: " << gepRuntimeCheck << " \n";
+            dbgs() << "  Builtin Check: " << gepBuiltinCheck << " \n";
             dbgs() << "-------------------------------------------\n";
         }
 
@@ -148,8 +150,9 @@ namespace
                         // TODO: Simply ignoring it may cause some bugs
                         if (gep->getType()->isPointerTy())
                         {
-                            if (isSafePointer(gep)) {
-                                gepOptimizedCounter++;
+                            if (isSafePointer(gep))
+                            {
+                                gepOptimized++;
                                 continue;
                             }
                             gepInsts.push_back(gep);
@@ -207,7 +210,7 @@ namespace
             gep->replaceUsesWithIf(masked, [result, masked](Use &U)
                                    { return U.getUser() != result && U.getUser() != masked; });
 
-            gepHookedCounter++;
+            gepRuntimeCheck++;
         }
 
         void addBitcastChecker(BitCastInst *bc)
@@ -234,20 +237,20 @@ namespace
             bc->replaceUsesWithIf(masked, [ptr, masked](Use &U)
                                   { return U.getUser() != ptr && U.getUser() != masked; });
 
-            bitcastHookedCounter++;
+            bitcastRuntimeCheck++;
         }
 
         bool isSafePointer(Value *addr)
         {
             uint32_t typeSize = DL->getTypeAllocSize(addr->getType()->getPointerElementType());
+
             SizeOffsetEvalType sizeOffset = OSOE->compute(addr);
+
+            Value *size = sizeOffset.first;
+            Value *offset = sizeOffset.second;
 
             if (OSOE->bothKnown(sizeOffset))
             {
-
-                Value *size = sizeOffset.first;
-                Value *offset = sizeOffset.second;
-
                 if (isa<ConstantInt>(size) && isa<ConstantInt>(offset))
                 {
                     uint64_t sz = dyn_cast<ConstantInt>(size)->getZExtValue();
@@ -257,7 +260,6 @@ namespace
                         sz - uint64_t(oft) >= typeSize)
                         return true;
                 }
-                
             }
 
             return false;
