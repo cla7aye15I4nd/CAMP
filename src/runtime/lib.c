@@ -3,14 +3,14 @@
 #define OVERFLOW_MAXSZ 0x7fff
 #define OVERFLOW_OFFSET 48
 #define MARK_OVERFLOW(PTR, LEN) ((void *)(((uint64_t)PTR) | (((uint16_t)(LEN)) << OVERFLOW_OFFSET)))
-#define CHECK_OVERFLOW(LEN)                                    \
-    do                                                         \
-    {                                                          \
-        if (-OVERFLOW_MAXSZ > (LEN) || (LEN) < OVERFLOW_MAXSZ) \
-        {                                                      \
-            perror("Overflow too many bytes");                 \
-            abort();                                           \
-        }                                                      \
+#define CHECK_OVERFLOW(LEN)                                        \
+    do                                                             \
+    {                                                              \
+        if ((-OVERFLOW_MAXSZ > (LEN)) || ((LEN) > OVERFLOW_MAXSZ)) \
+        {                                                          \
+            perror("Overflow too many bytes");                     \
+            abort();                                               \
+        }                                                          \
     } while (0)
 
 #pragma GCC diagnostic push
