@@ -2,7 +2,7 @@
 
 #define OVERFLOW_MAXSZ 0x7fff
 #define OVERFLOW_OFFSET 48
-#define MARK_OVERFLOW(PTR, LEN) ((void *)(((uint64_t)PTR) | (((uint16_t)(LEN)) << OVERFLOW_OFFSET)))
+#define MARK_OVERFLOW(PTR, LEN) ((void *)(((uint64_t)PTR) | (((uint64_t)((uint16_t)(LEN))) << OVERFLOW_OFFSET)))
 #define CHECK_OVERFLOW(LEN)                                        \
     do                                                             \
     {                                                              \
@@ -13,8 +13,6 @@
         }                                                          \
     } while (0)
 
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wshift-count-overflow"
 void *__violet_builtin_check(void *ptr, int64_t size, int64_t offset, int64_t needsize)
 {
     int64_t overflow = 0;
@@ -43,4 +41,3 @@ void *__violet_bitcast_check(void *ptr, int64_t size)
     CHECK_OVERFLOW(overflow);
     return MARK_OVERFLOW(ptr, overflow);
 }
-#pragma GCC diagnostic pop
