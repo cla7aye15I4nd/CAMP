@@ -38,12 +38,14 @@ namespace
 
         // Basic
         Module *M;
+        Function *F;
         const DataLayout *DL;
 
         // Analysis
         const TargetLibraryInfo *TLI;
         ScalarEvolution *SE;
         ObjectSizeOffsetEvaluator *OSOE;
+        DominatorTree *DT;
 
         // Type Utils
         Type *int1Type;
@@ -70,8 +72,17 @@ namespace
                 F.getInstructionCount() > 0)
             {
 
+                this->F = &F;
+
                 M = F.getParent();
                 DL = &M->getDataLayout();
+                TLI = &getAnalysis<TargetLibraryInfoWrapperPass>().getTLI(F);
+                SE = &getAnalysis<ScalarEvolutionWrapperPass>().getSE();
+
+                ObjectSizeOpts EvalOpts;
+                EvalOpts.RoundToAlign = true;
+                OSOE = new ObjectSizeOffsetEvaluator(*DL, TLI, F.getContext(), EvalOpts);
+                DT = new DominatorTree(F);
 
                 gepOptimized = 0;
                 gepRuntimeCheck = 0;
@@ -81,9 +92,9 @@ namespace
                 bitcastRuntimeCheck = 0;
 
                 bindRuntime();
-                hookInstruction(F);
+                hookInstruction();
 
-                report(F);
+                report();
             }
             return false;
         }
@@ -137,9 +148,9 @@ namespace
             AU.addRequired<ScalarEvolutionWrapperPass>();
         }
 
-        void report(Function &F)
+        void report()
         {
-            dbgs() << "[REPORT:" << F.getName() << "]\n";
+            dbgs() << "[REPORT:" << F->getName() << "]\n";
             if (bitcastOptimized > 0 || bitcastRuntimeCheck > 0 || bitcastBuiltinCheck > 0)
             {
                 dbgs() << "    [BitCast]\n";
@@ -157,21 +168,14 @@ namespace
             }
         }
 
-        void hookInstruction(Function &F)
+        void hookInstruction()
         {
-            SmallVector<GetElementPtrInst *, 16> runtimeCheckGep;
-            SmallVector<std::pair<GetElementPtrInst *, Value *>, 16> builtinCheckGep;
-            SmallVector<BitCastInst *, 16> runtimeCheckBc;
-            SmallVector<std::pair<BitCastInst *, Value *>, 16> builtinCheckBc;
+            SmallVector<Instruction *, 16> runtimeCheckGep;
+            SmallVector<std::pair<Instruction *, Value *>, 16> builtinCheckGep;
+            SmallVector<Instruction *, 16> runtimeCheckBc;
+            SmallVector<std::pair<Instruction *, Value *>, 16> builtinCheckBc;
 
-            this->TLI = &getAnalysis<TargetLibraryInfoWrapperPass>().getTLI(F);
-            this->SE = &getAnalysis<ScalarEvolutionWrapperPass>().getSE();
-
-            ObjectSizeOpts EvalOpts;
-            EvalOpts.RoundToAlign = true;
-            this->OSOE = new ObjectSizeOffsetEvaluator(*DL, TLI, F.getContext(), EvalOpts);
-
-            for (BasicBlock &BB : F)
+            for (BasicBlock &BB : *F)
                 for (Instruction &I : BB)
                     if (GetElementPtrInst *gep = dyn_cast<GetElementPtrInst>(&I))
                     {
@@ -247,7 +251,7 @@ namespace
                                  { return U.getUser() != ptr && U.getUser() != masked; });
         }
 
-        void addGepRuntimeCheck(GetElementPtrInst *gep)
+        void addGepRuntimeCheck(Instruction *I)
         {
             /*
                 Before:
@@ -258,6 +262,8 @@ namespace
                     %masked = __gep_check(%base, %result, size)
                     then replace all %result with %masked
             */
+            auto gep = dyn_cast_or_null<GetElementPtrInst>(I);
+            assert(gep != nullptr && "addGepRuntimeCheck: Require GetElementPtrInst");
 
             uint64_t typeSize = DL->getTypeAllocSize(gep->getType()->getPointerElementType());
 
@@ -275,7 +281,7 @@ namespace
                                    { return U.getUser() != result && U.getUser() != masked; });
         }
 
-        void addBitcastRuntimeCheck(BitCastInst *bc)
+        void addBitcastRuntimeCheck(Instruction *I)
         {
             /*
                 Before:
@@ -286,6 +292,9 @@ namespace
                     %masked = __bitcast_check(%dst, size)
                     then replace all %dst with %masked
             */
+
+            auto bc = dyn_cast_or_null<BitCastInst>(I);
+            assert(bc != nullptr && "addBitcastRuntimeCheck: Require BitCastInst");
 
             IRBuilder<> irBuilder(bc->getNextNode());
 
@@ -300,25 +309,23 @@ namespace
                                   { return U.getUser() != ptr && U.getUser() != masked; });
         }
 
-        template <typename T, unsigned N>
-        bool allocateChecker(T Ptr, SmallVector<T, N> &runtimeCheck, SmallVector<std::pair<T, Value *>, N> &builtinCheck)
+        bool allocateChecker(
+            Instruction *Ptr,
+            SmallVector<Instruction *, 16> &runtimeCheck,
+            SmallVector<std::pair<Instruction *, Value *>, 16> &builtinCheck)
         {
-            Value *Or = getBoundsCheckCond(Ptr);
-            if (Or == nullptr)
-            {
-                runtimeCheck.push_back(Ptr);
-                return true;
-            }
+            assert(Ptr->getType()->isPointerTy() && "allocateChecker(): Ptr should be pointer type");
 
+            Value *Or = getBoundsCheckCond(Ptr);
             ConstantInt *C = dyn_cast_or_null<ConstantInt>(Or);
-            if (C)
-            {
-                if (!C->getZExtValue())
-                    return false;
-            }
+
+            if (C && !C->getZExtValue())
+                return false;
 
             // FIXME: The bounds checking has some wired bugs
-            // builtinCheck.push_back(std::make_pair(Ptr, Or));
+            // if (Or != nullptr)
+            //     builtinCheck.push_back(std::make_pair(Ptr, Or));
+            // else
             runtimeCheck.push_back(Ptr);
             return true;
         }
@@ -326,6 +333,7 @@ namespace
         Value *getBoundsCheckCond(Instruction *Ptr)
         {
             assert(Ptr->getType()->isPointerTy() && "getBoundsCheckCond(): Ptr should be pointer type");
+
             uint32_t NeededSize = DL->getTypeAllocSize(Ptr->getType()->getPointerElementType());
             IRBuilder<TargetFolder> IRB(Ptr->getParent(), BasicBlock::iterator(Ptr), TargetFolder(*DL));
 
@@ -344,13 +352,6 @@ namespace
             auto OffsetRange = SE->getUnsignedRange(SE->getSCEV(Offset));
             auto NeededSizeRange = SE->getUnsignedRange(SE->getSCEV(NeededSizeVal));
 
-            // three checks are required to ensure safety:
-            // . Offset >= 0  (since the offset is given from the base ptr)
-            // . Size >= Offset  (unsigned)
-            // . Size - Offset >= NeededSize  (unsigned)
-            //
-            // optimization: if Size >= 0 (signed), skip 1st check
-            // FIXME: add NSW/NUW here?  -- we dont care if the subtraction overflows
             Value *ObjSize = IRB.CreateSub(Size, Offset);
             Value *Cmp2 = SizeRange.getUnsignedMin().uge(OffsetRange.getUnsignedMax())
                               ? ConstantInt::getFalse(Ptr->getContext())
@@ -370,6 +371,7 @@ namespace
 
             return Or;
         }
+
     };
 }
 
