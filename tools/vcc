@@ -10,6 +10,8 @@ if [ $# -eq 0 ]
     exit 0
 fi
 
+# The optimization level must be greater than -O0,
+# otherwise some analysis methods cannot be enabled.
 exec clang -Os -Xclang -load -Xclang ${BASE}/build/src/compiler_pass/libProtectionPass.so \
         "$@" \
         ${BASE}/build/src/runtime/libruntime.a \
