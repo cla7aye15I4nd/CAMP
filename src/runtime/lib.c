@@ -15,28 +15,32 @@
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wshift-count-overflow"
-void *__violet_builtin_check(void *ptr, int64_t size, int64_t offset)
+void *__violet_builtin_check(void *ptr, int64_t size, int64_t offset, int64_t needsize)
 {
     int64_t overflow = 0;
     if (offset < 0)
         overflow = offset;
-    else if (offset > size)
-        overflow = offset - size;
+    else if (offset + needsize > size)
+        overflow = offset + needsize - size;
 
     CHECK_OVERFLOW(overflow);
     return MARK_OVERFLOW(ptr, overflow);
 }
 
-void *__violet_gep_check(void *base, void *result, int64_t size)
+void *__violet_gep_check(void *base, void *ptr, int64_t size)
 {
     int64_t overflow = 0;
 
     CHECK_OVERFLOW(overflow);
-    return MARK_OVERFLOW(result, overflow);
+    return MARK_OVERFLOW(ptr, overflow);
 }
-#pragma GCC diagnostic pop
+
 
 void *__violet_bitcast_check(void *ptr, int64_t size)
 {
-    return ptr;
+    int64_t overflow = 0;
+
+    CHECK_OVERFLOW(overflow);
+    return MARK_OVERFLOW(ptr, overflow);
 }
+#pragma GCC diagnostic pop
