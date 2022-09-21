@@ -27,7 +27,7 @@ using namespace llvm;
 /* Runttime Function List */
 #define __GEP_CHECK "__violet_gep_check"         // void* __gep_check(void*, void*, int64_t)
 #define __BITCAST_CHECK "__violet_bitcast_check" // void *__bitcast_check(void *, int64_t);
-#define __BUILTIN_CHECK "__violet_builtin_check" // __violet_builtin_check(void *, uint8_t, int64_t, int64_t);
+#define __BUILTIN_CHECK "__violet_builtin_check" // __violet_builtin_check(void *, int64_t, int64_t, int64_t);
 
 namespace
 {
@@ -48,7 +48,6 @@ namespace
         DominatorTree *DT;
 
         // Type Utils
-        Type *int1Type;
         Type *int64Type;
         Type *voidPointerType;
 
@@ -104,6 +103,7 @@ namespace
             static StringSet<> ifunc = {
                 __GEP_CHECK,
                 __BITCAST_CHECK,
+                __BUILTIN_CHECK,
             };
 
             return ifunc.count(name) != 0;
@@ -112,7 +112,6 @@ namespace
         void bindRuntime()
         {
             LLVMContext &context = M->getContext();
-            int1Type = Type::getInt1Ty(context);
             int64Type = Type::getInt64Ty(context);
             voidPointerType = Type::getInt8PtrTy(context, 0);
 
@@ -134,7 +133,7 @@ namespace
                 __BUILTIN_CHECK,
                 FunctionType::get(
                     voidPointerType,
-                    {voidPointerType, int1Type, int64Type, int64Type},
+                    {voidPointerType, int64Type, int64Type, int64Type},
                     false));
         }
 
@@ -171,9 +170,9 @@ namespace
         void hookInstruction()
         {
             SmallVector<Instruction *, 16> runtimeCheckGep;
-            SmallVector<std::pair<Instruction *, Value *>, 16> builtinCheckGep;
+            SmallVector<Instruction *, 16> builtinCheckGep;
             SmallVector<Instruction *, 16> runtimeCheckBc;
-            SmallVector<std::pair<Instruction *, Value *>, 16> builtinCheckBc;
+            SmallVector<Instruction *, 16> builtinCheckBc;
 
             for (BasicBlock &BB : *F)
                 for (Instruction &I : BB)
@@ -211,10 +210,10 @@ namespace
                 addGepRuntimeCheck(gep);
             }
 
-            for (auto &[gep, cond] : builtinCheckGep)
+            for (auto &gep : builtinCheckGep)
             {
                 gepBuiltinCheck++;
-                addBuiltinCheck(gep, cond);
+                addBuiltinCheck(gep);
             }
 
             for (auto bc : runtimeCheckBc)
@@ -223,14 +222,14 @@ namespace
                 addBitcastRuntimeCheck(bc);
             }
 
-            for (auto &[bc, cond] : builtinCheckBc)
+            for (auto &bc : builtinCheckBc)
             {
                 bitcastBuiltinCheck++;
-                addBuiltinCheck(bc, cond);
+                addBuiltinCheck(bc);
             }
         }
 
-        void addBuiltinCheck(Instruction *I, Value *cond)
+        void addBuiltinCheck(Instruction *I)
         {
             /*
                 llvm/lib/Transforms/Instrumentation/BoundsChecking.cpp
@@ -242,9 +241,10 @@ namespace
             Value *ptr = irBuilder.CreatePointerCast(I, voidPointerType);
             Value *size = SizeOffset.first;
             Value *offset = SizeOffset.second;
+            Value *needsize = irBuilder.getInt64(DL->getTypeAllocSize(I->getType()->getPointerElementType()));
 
             Value *masked = irBuilder.CreatePointerCast(
-                irBuilder.CreateCall(M->getFunction(__BUILTIN_CHECK), {ptr, cond, size, offset}),
+                irBuilder.CreateCall(M->getFunction(__BUILTIN_CHECK), {ptr, size, offset, needsize}),
                 I->getType());
 
             I->replaceUsesWithIf(masked, [ptr, masked](Use &U)
@@ -312,7 +312,7 @@ namespace
         bool allocateChecker(
             Instruction *Ptr,
             SmallVector<Instruction *, 16> &runtimeCheck,
-            SmallVector<std::pair<Instruction *, Value *>, 16> &builtinCheck)
+            SmallVector<Instruction *, 16> &builtinCheck)
         {
             assert(Ptr->getType()->isPointerTy() && "allocateChecker(): Ptr should be pointer type");
 
@@ -323,10 +323,10 @@ namespace
                 return false;
 
             // FIXME: The bounds checking has some wired bugs
-            // if (Or != nullptr)
-            //     builtinCheck.push_back(std::make_pair(Ptr, Or));
-            // else
-            runtimeCheck.push_back(Ptr);
+            if (Or != nullptr)
+                builtinCheck.push_back(Ptr);
+            else
+                runtimeCheck.push_back(Ptr);
             return true;
         }
 
@@ -371,11 +371,9 @@ namespace
 
             return Or;
         }
-
     };
 }
 
-// char VGlobalsMetadataWrapperPass::ID = 0;
 char VProtectionPass::ID = 0;
 
 static void registerPass(const PassManagerBuilder &,
