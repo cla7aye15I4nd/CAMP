@@ -324,13 +324,13 @@ namespace
                 return false;
 
             // FIXME: The bounds checking has some wired bugs
-            if (Or != nullptr)
-                // We need save the `SizeOffset` before instrument.
-                // Because the analysis result will changed after instrument, 
-                // but our instrument will not change the semantic.
-                builtinCheck.push_back(std::make_pair(Ptr, SizeOffset));
-            else
-                runtimeCheck.push_back(Ptr);
+            // if (Or != nullptr)
+            //     // We need save the `SizeOffset` before instrument.
+            //     // Because the analysis result will changed after instrument, 
+            //     // but our instrument will not change the semantic.
+            //     builtinCheck.push_back(std::make_pair(Ptr, SizeOffset));
+            // else
+            runtimeCheck.push_back(Ptr);
             return true;
         }
 
