@@ -94,6 +94,7 @@ namespace
                 hookInstruction();
 
                 report();
+                return true;
             }
             return false;
         }
@@ -170,9 +171,9 @@ namespace
         void hookInstruction()
         {
             SmallVector<Instruction *, 16> runtimeCheckGep;
-            SmallVector<Instruction *, 16> builtinCheckGep;
+            SmallVector<std::pair<Instruction *, SizeOffsetEvalType>, 16> builtinCheckGep;
             SmallVector<Instruction *, 16> runtimeCheckBc;
-            SmallVector<Instruction *, 16> builtinCheckBc;
+            SmallVector<std::pair<Instruction *, SizeOffsetEvalType>, 16> builtinCheckBc;
 
             for (BasicBlock &BB : *F)
                 for (Instruction &I : BB)
@@ -210,33 +211,32 @@ namespace
                 addGepRuntimeCheck(gep);
             }
 
-            for (auto &gep : builtinCheckGep)
+            for (auto &[gep, sizeoffset] : builtinCheckGep)
             {
                 gepBuiltinCheck++;
-                addBuiltinCheck(gep);
+                addBuiltinCheck(gep, sizeoffset);
             }
 
-            for (auto bc : runtimeCheckBc)
+            for (auto &bc : runtimeCheckBc)
             {
                 bitcastRuntimeCheck++;
                 addBitcastRuntimeCheck(bc);
             }
 
-            for (auto &bc : builtinCheckBc)
+            for (auto &[bc, sizeoffset] : builtinCheckBc)
             {
                 bitcastBuiltinCheck++;
-                addBuiltinCheck(bc);
+                addBuiltinCheck(bc, sizeoffset);
             }
         }
 
-        void addBuiltinCheck(Instruction *I)
+        void addBuiltinCheck(Instruction *I, SizeOffsetEvalType &SizeOffset)
         {
             /*
                 llvm/lib/Transforms/Instrumentation/BoundsChecking.cpp
             */
 
-            SizeOffsetEvalType SizeOffset = OSOE->compute(I);
-            IRBuilder<> irBuilder(I->getNextNode());
+            IRBuilder<TargetFolder> irBuilder(I->getNextNode()->getParent(), BasicBlock::iterator(I->getNextNode()), TargetFolder(*DL));
 
             Value *ptr = irBuilder.CreatePointerCast(I, voidPointerType);
             Value *size = SizeOffset.first;
@@ -312,11 +312,12 @@ namespace
         bool allocateChecker(
             Instruction *Ptr,
             SmallVector<Instruction *, 16> &runtimeCheck,
-            SmallVector<Instruction *, 16> &builtinCheck)
+            SmallVector<std::pair<Instruction *, SizeOffsetEvalType>, 16> &builtinCheck)
         {
             assert(Ptr->getType()->isPointerTy() && "allocateChecker(): Ptr should be pointer type");
 
-            Value *Or = getBoundsCheckCond(Ptr);
+            SizeOffsetEvalType SizeOffset;
+            Value *Or = getBoundsCheckCond(Ptr, SizeOffset);
             ConstantInt *C = dyn_cast_or_null<ConstantInt>(Or);
 
             if (C && !C->getZExtValue())
@@ -324,20 +325,23 @@ namespace
 
             // FIXME: The bounds checking has some wired bugs
             if (Or != nullptr)
-                builtinCheck.push_back(Ptr);
+                // We need save the `SizeOffset` before instrument.
+                // Because the analysis result will changed after instrument, 
+                // but our instrument will not change the semantic.
+                builtinCheck.push_back(std::make_pair(Ptr, SizeOffset));
             else
                 runtimeCheck.push_back(Ptr);
             return true;
         }
 
-        Value *getBoundsCheckCond(Instruction *Ptr)
+        Value *getBoundsCheckCond(Instruction *Ptr, SizeOffsetEvalType &SizeOffset)
         {
             assert(Ptr->getType()->isPointerTy() && "getBoundsCheckCond(): Ptr should be pointer type");
 
             uint32_t NeededSize = DL->getTypeAllocSize(Ptr->getType()->getPointerElementType());
             IRBuilder<TargetFolder> IRB(Ptr->getParent(), BasicBlock::iterator(Ptr), TargetFolder(*DL));
 
-            SizeOffsetEvalType SizeOffset = OSOE->compute(Ptr);
+            SizeOffset = OSOE->compute(Ptr);
             if (!OSOE->bothKnown(SizeOffset))
                 return nullptr;
 
