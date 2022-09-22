@@ -15,6 +15,6 @@ fi
 # But over-optimization (O2 or higher) can lead to changes in semantics.
 exec clang++ -O1 -Xclang -load -Xclang ${BASE}/build/src/compiler_pass/libProtectionPass.so \
         "$@" \
-        ${BASE}/build/src/runtime/libruntime.a \
+        -L${BASE}/build/src/safe_gperftools -ltcmalloc \
         -Qunused-arguments \
         -Wpointer-arith

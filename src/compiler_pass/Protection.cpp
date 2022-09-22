@@ -25,9 +25,9 @@ using namespace llvm;
 #define DEBUG_TYPE ""
 
 /* Runttime Function List */
-#define __GEP_CHECK "__violet_gep_check"         // void* __gep_check(void*, void*, int64_t)
-#define __BITCAST_CHECK "__violet_bitcast_check" // void *__bitcast_check(void *, int64_t);
-#define __BUILTIN_CHECK "__violet_builtin_check" // __violet_builtin_check(void *, int64_t, int64_t, int64_t);
+#define __GEP_CHECK "tc_check_boundary"
+#define __BITCAST_CHECK "__violet_bitcast_check"
+#define __BUILTIN_CHECK "__violet_builtin_check"
 
 namespace
 {
@@ -103,8 +103,8 @@ namespace
         {
             static StringSet<> ifunc = {
                 __GEP_CHECK,
-                __BITCAST_CHECK,
-                __BUILTIN_CHECK,
+                // __BITCAST_CHECK,
+                // __BUILTIN_CHECK,
             };
 
             return ifunc.count(name) != 0;
@@ -123,19 +123,19 @@ namespace
                     {voidPointerType, voidPointerType, int64Type},
                     false));
 
-            M->getOrInsertFunction(
-                __BITCAST_CHECK,
-                FunctionType::get(
-                    voidPointerType,
-                    {voidPointerType, int64Type},
-                    false));
+            // M->getOrInsertFunction(
+            //     __BITCAST_CHECK,
+            //     FunctionType::get(
+            //         voidPointerType,
+            //         {voidPointerType, int64Type},
+            //         false));
 
-            M->getOrInsertFunction(
-                __BUILTIN_CHECK,
-                FunctionType::get(
-                    voidPointerType,
-                    {voidPointerType, int64Type, int64Type, int64Type},
-                    false));
+            // M->getOrInsertFunction(
+            //     __BUILTIN_CHECK,
+            //     FunctionType::get(
+            //         voidPointerType,
+            //         {voidPointerType, int64Type, int64Type, int64Type},
+            //         false));
         }
 
         void getAnalysisUsage(AnalysisUsage &AU) const override
@@ -211,23 +211,23 @@ namespace
                 addGepRuntimeCheck(gep);
             }
 
-            for (auto &[gep, sizeoffset] : builtinCheckGep)
-            {
-                gepBuiltinCheck++;
-                addBuiltinCheck(gep, sizeoffset);
-            }
+            // for (auto &[gep, sizeoffset] : builtinCheckGep)
+            // {
+            //     gepBuiltinCheck++;
+            //     addBuiltinCheck(gep, sizeoffset);
+            // }
 
-            for (auto &bc : runtimeCheckBc)
-            {
-                bitcastRuntimeCheck++;
-                addBitcastRuntimeCheck(bc);
-            }
+            // for (auto &bc : runtimeCheckBc)
+            // {
+            //     bitcastRuntimeCheck++;
+            //     addBitcastRuntimeCheck(bc);
+            // }
 
-            for (auto &[bc, sizeoffset] : builtinCheckBc)
-            {
-                bitcastBuiltinCheck++;
-                addBuiltinCheck(bc, sizeoffset);
-            }
+            // for (auto &[bc, sizeoffset] : builtinCheckBc)
+            // {
+            //     bitcastBuiltinCheck++;
+            //     addBuiltinCheck(bc, sizeoffset);
+            // }
         }
 
         void addBuiltinCheck(Instruction *I, SizeOffsetEvalType &SizeOffset)

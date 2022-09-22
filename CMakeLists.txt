@@ -10,4 +10,5 @@ add_definitions(${LLVM_DEFINITIONS_LIST})
 include_directories(${LLVM_INCLUDE_DIRS})
 
 add_subdirectory(src/compiler_pass)
-add_subdirectory(src/runtime)
+add_subdirectory(src/safe_gperftools)
+
