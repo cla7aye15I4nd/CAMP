@@ -13,7 +13,7 @@ fi
 # The optimization level must be greater than -O0,
 # otherwise some analysis methods cannot be enabled.
 # But over-optimization (O2 or higher) can lead to changes in semantics.
-exec clang -Os -Xclang -load -Xclang ${BASE}/build/src/compiler_pass/libProtectionPass.so \
+exec clang -O3 -Xclang -load -Xclang ${BASE}/build/src/compiler_pass/libProtectionPass.so \
         "$@" \
         -L${BASE}/build/src/tcmalloc -ltcmalloc \
         -Qunused-arguments \
