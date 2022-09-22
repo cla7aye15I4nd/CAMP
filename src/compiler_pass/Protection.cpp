@@ -227,7 +227,7 @@ namespace
                             unsigned int srcSize = DL->getTypeAllocSize(bc->getSrcTy()->getPointerElementType());
                             unsigned int dstSize = DL->getTypeAllocSize(bc->getDestTy()->getPointerElementType());
 
-                            if (srcSize <= dstSize)
+                            if (srcSize == dstSize)
                                 continue;
                             if (!allocateChecker(bc, runtimeCheckBc, builtinCheckBc))
                                 bitcastOptimized++;
