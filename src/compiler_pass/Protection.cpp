@@ -25,9 +25,10 @@ using namespace llvm;
 #define DEBUG_TYPE ""
 
 /* Runttime Function List */
-#define __GEP_CHECK "tc_check_boundary"
-#define __BITCAST_CHECK "__violet_bitcast_check"
-#define __BUILTIN_CHECK "__violet_builtin_check"
+#define __GEP_CHECK "tc_gep_check_boundary"
+#define __BITCAST_CHECK "tc_bc_check_boundary"
+#define __BUILTIN_CHECK "tc_builtin_check_boundary"
+#define __REPORT_STATISTIC "tc_report_statistic"
 
 namespace
 {
@@ -48,6 +49,7 @@ namespace
         DominatorTree *DT;
 
         // Type Utils
+        Type *voidType;
         Type *int64Type;
         Type *voidPointerType;
 
@@ -93,6 +95,9 @@ namespace
                 bindRuntime();
                 hookInstruction();
 
+                if (F.getName() == "main")
+                    insertReport();
+
                 report();
                 return true;
             }
@@ -103,8 +108,9 @@ namespace
         {
             static StringSet<> ifunc = {
                 __GEP_CHECK,
-                // __BITCAST_CHECK,
-                // __BUILTIN_CHECK,
+                __BITCAST_CHECK,
+                __BUILTIN_CHECK,
+                __REPORT_STATISTIC,
             };
 
             return ifunc.count(name) != 0;
@@ -113,6 +119,7 @@ namespace
         void bindRuntime()
         {
             LLVMContext &context = M->getContext();
+            voidType = Type::getVoidTy(context);
             int64Type = Type::getInt64Ty(context);
             voidPointerType = Type::getInt8PtrTy(context, 0);
 
@@ -123,19 +130,41 @@ namespace
                     {voidPointerType, voidPointerType, int64Type},
                     false));
 
-            // M->getOrInsertFunction(
-            //     __BITCAST_CHECK,
-            //     FunctionType::get(
-            //         voidPointerType,
-            //         {voidPointerType, int64Type},
-            //         false));
+            M->getOrInsertFunction(
+                __BITCAST_CHECK,
+                FunctionType::get(
+                    voidPointerType,
+                    {voidPointerType, int64Type},
+                    false));
 
-            // M->getOrInsertFunction(
-            //     __BUILTIN_CHECK,
-            //     FunctionType::get(
-            //         voidPointerType,
-            //         {voidPointerType, int64Type, int64Type, int64Type},
-            //         false));
+            M->getOrInsertFunction(
+                __BUILTIN_CHECK,
+                FunctionType::get(
+                    voidPointerType,
+                    {voidPointerType, int64Type, int64Type, int64Type},
+                    false));
+
+            M->getOrInsertFunction(
+                __REPORT_STATISTIC,
+                FunctionType::get(
+                    voidType,
+                    {},
+                    false));
+        }
+
+        void insertReport()
+        {
+            SmallVector<Instruction *, 16> returns;
+            for (BasicBlock &BB : *F)
+                for (Instruction &I : BB)
+                    if (ReturnInst *ret = dyn_cast<ReturnInst>(&I))
+                        returns.push_back(ret);
+
+            for (auto ret : returns)
+            {
+                IRBuilder<> irBuilder(ret);
+                irBuilder.CreateCall(M->getFunction(__REPORT_STATISTIC));
+            }
         }
 
         void getAnalysisUsage(AnalysisUsage &AU) const override
@@ -326,7 +355,7 @@ namespace
             // FIXME: The bounds checking has some wired bugs
             // if (Or != nullptr)
             //     // We need save the `SizeOffset` before instrument.
-            //     // Because the analysis result will changed after instrument, 
+            //     // Because the analysis result will changed after instrument,
             //     // but our instrument will not change the semantic.
             //     builtinCheck.push_back(std::make_pair(Ptr, SizeOffset));
             // else
