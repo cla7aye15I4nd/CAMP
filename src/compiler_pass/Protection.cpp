@@ -240,23 +240,23 @@ namespace
                 addGepRuntimeCheck(gep);
             }
 
-            // for (auto &[gep, sizeoffset] : builtinCheckGep)
-            // {
-            //     gepBuiltinCheck++;
-            //     addBuiltinCheck(gep, sizeoffset);
-            // }
+            for (auto &[gep, sizeoffset] : builtinCheckGep)
+            {
+                gepBuiltinCheck++;
+                addBuiltinCheck(gep, sizeoffset);
+            }
 
-            // for (auto &bc : runtimeCheckBc)
-            // {
-            //     bitcastRuntimeCheck++;
-            //     addBitcastRuntimeCheck(bc);
-            // }
+            for (auto &bc : runtimeCheckBc)
+            {
+                bitcastRuntimeCheck++;
+                addBitcastRuntimeCheck(bc);
+            }
 
-            // for (auto &[bc, sizeoffset] : builtinCheckBc)
-            // {
-            //     bitcastBuiltinCheck++;
-            //     addBuiltinCheck(bc, sizeoffset);
-            // }
+            for (auto &[bc, sizeoffset] : builtinCheckBc)
+            {
+                bitcastBuiltinCheck++;
+                addBuiltinCheck(bc, sizeoffset);
+            }
         }
 
         void addBuiltinCheck(Instruction *I, SizeOffsetEvalType &SizeOffset)
@@ -276,8 +276,8 @@ namespace
                 irBuilder.CreateCall(M->getFunction(__BUILTIN_CHECK), {ptr, size, offset, needsize}),
                 I->getType());
 
-            I->replaceUsesWithIf(masked, [ptr, masked](Use &U)
-                                 { return U.getUser() != ptr && U.getUser() != masked; });
+            // I->replaceUsesWithIf(masked, [ptr, masked](Use &U)
+            //                      { return U.getUser() != ptr && U.getUser() != masked; });
         }
 
         void addGepRuntimeCheck(Instruction *I)
@@ -306,8 +306,8 @@ namespace
                 irBuilder.CreateCall(M->getFunction(__GEP_CHECK), {base, result, size}),
                 gep->getType());
 
-            gep->replaceUsesWithIf(masked, [result, masked](Use &U)
-                                   { return U.getUser() != result && U.getUser() != masked; });
+            // gep->replaceUsesWithIf(masked, [result, masked](Use &U)
+            //                        { return U.getUser() != result && U.getUser() != masked; });
         }
 
         void addBitcastRuntimeCheck(Instruction *I)
@@ -334,8 +334,8 @@ namespace
                 irBuilder.CreateCall(M->getFunction(__BITCAST_CHECK), {ptr, size}),
                 bc->getType());
 
-            bc->replaceUsesWithIf(masked, [ptr, masked](Use &U)
-                                  { return U.getUser() != ptr && U.getUser() != masked; });
+            // bc->replaceUsesWithIf(masked, [ptr, masked](Use &U)
+            //                       { return U.getUser() != ptr && U.getUser() != masked; });
         }
 
         bool allocateChecker(
@@ -353,13 +353,13 @@ namespace
                 return false;
 
             // FIXME: The bounds checking has some wired bugs
-            // if (Or != nullptr)
-            //     // We need save the `SizeOffset` before instrument.
-            //     // Because the analysis result will changed after instrument,
-            //     // but our instrument will not change the semantic.
-            //     builtinCheck.push_back(std::make_pair(Ptr, SizeOffset));
-            // else
-            runtimeCheck.push_back(Ptr);
+            if (Or != nullptr)
+                // We need save the `SizeOffset` before instrument.
+                // Because the analysis result will changed after instrument,
+                // but our instrument will not change the semantic.
+                builtinCheck.push_back(std::make_pair(Ptr, SizeOffset));
+            else
+                runtimeCheck.push_back(Ptr);
             return true;
         }
 
