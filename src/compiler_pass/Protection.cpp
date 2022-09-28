@@ -9,6 +9,7 @@
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/Transforms/IPO/PassManagerBuilder.h"
+#include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Analysis/PostDominators.h"
 #include "llvm/Analysis/AliasAnalysis.h"
@@ -18,7 +19,6 @@
 #include "llvm/Analysis/TargetFolder.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
-
 #include <algorithm>
 using namespace llvm;
 
@@ -29,6 +29,7 @@ using namespace llvm;
 #define __BITCAST_CHECK "tc_bc_check_boundary"
 #define __BUILTIN_CHECK "tc_builtin_check_boundary"
 #define __REPORT_STATISTIC "tc_report_statistic"
+#define __REPORT_ERROR "tc_report_error"
 
 namespace
 {
@@ -47,6 +48,7 @@ namespace
         ScalarEvolution *SE;
         ObjectSizeOffsetEvaluator *OSOE;
         DominatorTree *DT;
+        LoopInfo *LI;
 
         // Type Utils
         Type *voidType;
@@ -79,6 +81,7 @@ namespace
                 DL = &M->getDataLayout();
                 TLI = &getAnalysis<TargetLibraryInfoWrapperPass>().getTLI(F);
                 SE = &getAnalysis<ScalarEvolutionWrapperPass>().getSE();
+                LI = &getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
 
                 ObjectSizeOpts EvalOpts;
                 EvalOpts.RoundToAlign = true;
@@ -111,6 +114,7 @@ namespace
                 __BITCAST_CHECK,
                 __BUILTIN_CHECK,
                 __REPORT_STATISTIC,
+                __REPORT_ERROR,
             };
 
             return ifunc.count(name) != 0;
@@ -146,6 +150,13 @@ namespace
 
             M->getOrInsertFunction(
                 __REPORT_STATISTIC,
+                FunctionType::get(
+                    voidType,
+                    {},
+                    false));
+
+            M->getOrInsertFunction(
+                __REPORT_ERROR,
                 FunctionType::get(
                     voidType,
                     {},
@@ -200,9 +211,9 @@ namespace
         void hookInstruction()
         {
             SmallVector<Instruction *, 16> runtimeCheckGep;
-            SmallVector<std::pair<Instruction *, SizeOffsetEvalType>, 16> builtinCheckGep;
+            SmallVector<std::pair<Instruction *, Value *>, 16> builtinCheckGep;
             SmallVector<Instruction *, 16> runtimeCheckBc;
-            SmallVector<std::pair<Instruction *, SizeOffsetEvalType>, 16> builtinCheckBc;
+            SmallVector<std::pair<Instruction *, Value *>, 16> builtinCheckBc;
 
             for (BasicBlock &BB : *F)
                 for (Instruction &I : BB)
@@ -240,10 +251,10 @@ namespace
                 addGepRuntimeCheck(gep);
             }
 
-            for (auto &[gep, sizeoffset] : builtinCheckGep)
+            for (auto &[gep, cond] : builtinCheckGep)
             {
                 gepBuiltinCheck++;
-                addBuiltinCheck(gep, sizeoffset);
+                addBuiltinCheck(gep, cond);
             }
 
             for (auto &bc : runtimeCheckBc)
@@ -252,32 +263,22 @@ namespace
                 addBitcastRuntimeCheck(bc);
             }
 
-            for (auto &[bc, sizeoffset] : builtinCheckBc)
+            for (auto &[bc, cond] : builtinCheckBc)
             {
                 bitcastBuiltinCheck++;
-                addBuiltinCheck(bc, sizeoffset);
+                addBuiltinCheck(bc, cond);
             }
         }
 
-        void addBuiltinCheck(Instruction *I, SizeOffsetEvalType &SizeOffset)
+        void addBuiltinCheck(Instruction *I, Value *Cond)
         {
             /*
                 llvm/lib/Transforms/Instrumentation/BoundsChecking.cpp
             */
 
-            IRBuilder<TargetFolder> irBuilder(I->getNextNode()->getParent(), BasicBlock::iterator(I->getNextNode()), TargetFolder(*DL));
-
-            Value *ptr = irBuilder.CreatePointerCast(I, voidPointerType);
-            Value *size = SizeOffset.first;
-            Value *offset = SizeOffset.second;
-            Value *needsize = irBuilder.getInt64(DL->getTypeAllocSize(I->getType()->getPointerElementType()));
-
-            Value *masked = irBuilder.CreatePointerCast(
-                irBuilder.CreateCall(M->getFunction(__BUILTIN_CHECK), {ptr, size, offset, needsize}),
-                I->getType());
-
-            // I->replaceUsesWithIf(masked, [ptr, masked](Use &U)
-            //                      { return U.getUser() != ptr && U.getUser() != masked; });
+        
+            IRBuilder<> irBuilder(SplitBlockAndInsertIfThen(Cond, I->getNextNode(), false));
+            irBuilder.CreateCall(M->getFunction(__REPORT_ERROR), {});
         }
 
         void addGepRuntimeCheck(Instruction *I)
@@ -341,7 +342,7 @@ namespace
         bool allocateChecker(
             Instruction *Ptr,
             SmallVector<Instruction *, 16> &runtimeCheck,
-            SmallVector<std::pair<Instruction *, SizeOffsetEvalType>, 16> &builtinCheck)
+            SmallVector<std::pair<Instruction *, Value *>, 16> &builtinCheck)
         {
             assert(Ptr->getType()->isPointerTy() && "allocateChecker(): Ptr should be pointer type");
 
@@ -352,12 +353,15 @@ namespace
             if (C && !C->getZExtValue())
                 return false;
 
+            if (loopOptimize(Ptr))
+                return false;
+
             // FIXME: The bounds checking has some wired bugs
             if (Or != nullptr)
                 // We need save the `SizeOffset` before instrument.
                 // Because the analysis result will changed after instrument,
                 // but our instrument will not change the semantic.
-                builtinCheck.push_back(std::make_pair(Ptr, SizeOffset));
+                builtinCheck.push_back(std::make_pair(Ptr, Or));
             else
                 runtimeCheck.push_back(Ptr);
             return true;
@@ -403,6 +407,25 @@ namespace
             }
 
             return Or;
+        }
+
+        bool loopOptimize(Instruction *Ptr)
+        {
+            if (Loop *Lop = LI->getLoopFor(Ptr->getParent()))
+            {
+                dbgs() << "LOOP: "
+                       << "\n";
+                dbgs() << "  " << *Ptr << "\n";
+                dbgs() << "  " << *Lop << "\n";
+
+                auto indVar = Lop->getInductionVariable(*SE);
+                if (indVar == nullptr)
+                    return false;
+
+                dbgs() << *indVar << "\n";
+                // dbgs() << bounds->getStepInst() << "\n";
+            }
+            return false;
         }
     };
 }
