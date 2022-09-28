@@ -63,6 +63,13 @@ namespace
         int64_t bitcastBuiltinCheck;
         int64_t bitcastRuntimeCheck;
 
+        // Instruction
+        DenseMap<Instruction *, Value *> source;
+        DenseMap<Value *, SmallVector<Instruction *, 16> *> cluster;
+
+        SmallVector<Instruction *, 16> runtimeCheck;
+        SmallVector<std::pair<Instruction *, Value *>, 16> builtinCheck;
+
         StringRef getPassName() const override
         {
             return "VProtectionPass";
@@ -210,64 +217,12 @@ namespace
 
         void hookInstruction()
         {
-            SmallVector<Instruction *, 16> runtimeCheckGep;
-            SmallVector<std::pair<Instruction *, Value *>, 16> builtinCheckGep;
-            SmallVector<Instruction *, 16> runtimeCheckBc;
-            SmallVector<std::pair<Instruction *, Value *>, 16> builtinCheckBc;
+            collectInformation();
 
-            for (BasicBlock &BB : *F)
-                for (Instruction &I : BB)
-                    if (GetElementPtrInst *gep = dyn_cast<GetElementPtrInst>(&I))
-                    {
-                        // TODO: Simply ignoring it may cause some bugs
-                        if (gep->getType()->isPointerTy())
-                        {
-                            if (!allocateChecker(gep, runtimeCheckGep, builtinCheckGep))
-                                gepOptimized++;
-                        }
-                    }
-                    else if (BitCastInst *bc = dyn_cast<BitCastInst>(&I))
-                    {
-                        if (bc->getSrcTy()->isPointerTy() && bc->getDestTy()->isPointerTy())
-                        {
-                            // TODO: Simply ignoring it may cause some bugs
-                            if (!bc->getSrcTy()->getPointerElementType()->isSized() ||
-                                !bc->getDestTy()->getPointerElementType()->isSized())
-                                continue;
+            builtinOptimize();
+            partialBuiltinOptimize();
 
-                            unsigned int srcSize = DL->getTypeAllocSize(bc->getSrcTy()->getPointerElementType());
-                            unsigned int dstSize = DL->getTypeAllocSize(bc->getDestTy()->getPointerElementType());
-
-                            if (srcSize == dstSize)
-                                continue;
-                            if (!allocateChecker(bc, runtimeCheckBc, builtinCheckBc))
-                                bitcastOptimized++;
-                        }
-                    }
-
-            for (auto &gep : runtimeCheckGep)
-            {
-                gepRuntimeCheck++;
-                addGepRuntimeCheck(gep);
-            }
-
-            for (auto &[gep, cond] : builtinCheckGep)
-            {
-                gepBuiltinCheck++;
-                addBuiltinCheck(gep, cond);
-            }
-
-            for (auto &bc : runtimeCheckBc)
-            {
-                bitcastRuntimeCheck++;
-                addBitcastRuntimeCheck(bc);
-            }
-
-            for (auto &[bc, cond] : builtinCheckBc)
-            {
-                bitcastBuiltinCheck++;
-                addBuiltinCheck(bc, cond);
-            }
+            applyInstrument();
         }
 
         void addBuiltinCheck(Instruction *I, Value *Cond)
@@ -276,7 +231,6 @@ namespace
                 llvm/lib/Transforms/Instrumentation/BoundsChecking.cpp
             */
 
-        
             IRBuilder<> irBuilder(SplitBlockAndInsertIfThen(Cond, I->getNextNode(), false));
             irBuilder.CreateCall(M->getFunction(__REPORT_ERROR), {});
         }
@@ -339,10 +293,7 @@ namespace
             //                       { return U.getUser() != ptr && U.getUser() != masked; });
         }
 
-        bool allocateChecker(
-            Instruction *Ptr,
-            SmallVector<Instruction *, 16> &runtimeCheck,
-            SmallVector<std::pair<Instruction *, Value *>, 16> &builtinCheck)
+        bool allocateChecker(Instruction *Ptr, SmallVector<Instruction *, 16> &runtimeCheck, SmallVector<std::pair<Instruction *, Value *>, 16> &builtinCheck)
         {
             assert(Ptr->getType()->isPointerTy() && "allocateChecker(): Ptr should be pointer type");
 
@@ -351,9 +302,6 @@ namespace
             ConstantInt *C = dyn_cast_or_null<ConstantInt>(Or);
 
             if (C && !C->getZExtValue())
-                return false;
-
-            if (loopOptimize(Ptr))
                 return false;
 
             // FIXME: The bounds checking has some wired bugs
@@ -409,23 +357,121 @@ namespace
             return Or;
         }
 
-        bool loopOptimize(Instruction *Ptr)
+        Value *findSource(Value *V)
         {
-            if (Loop *Lop = LI->getLoopFor(Ptr->getParent()))
+            if (Instruction *I = dyn_cast<Instruction>(V))
             {
-                dbgs() << "LOOP: "
-                       << "\n";
-                dbgs() << "  " << *Ptr << "\n";
-                dbgs() << "  " << *Lop << "\n";
-
-                auto indVar = Lop->getInductionVariable(*SE);
-                if (indVar == nullptr)
-                    return false;
-
-                dbgs() << *indVar << "\n";
-                // dbgs() << bounds->getStepInst() << "\n";
+                if (source.count(I))
+                {
+                    return source[I];
+                }
             }
-            return false;
+
+            if (GetElementPtrInst *gep = dyn_cast<GetElementPtrInst>(V))
+            {
+                return source[gep] = findSource(gep->getPointerOperand());
+            }
+            if (BitCastInst *bc = dyn_cast<BitCastInst>(V))
+            {
+                return source[bc] = findSource(bc->getOperand(0));
+            }
+
+            return V;
+        }
+
+        void collectInformation()
+        {
+            for (BasicBlock &BB : *F)
+            {
+                for (Instruction &I : BB)
+                {
+                    if (isa<GetElementPtrInst>(I) || isa<BitCastInst>(I))
+                    {
+                        findSource(&I);
+                    }
+                }
+            }
+        }
+
+        void builtinOptimize()
+        {
+            for (BasicBlock &BB : *F)
+            {
+                for (Instruction &I : BB)
+                {
+                    if (GetElementPtrInst *gep = dyn_cast<GetElementPtrInst>(&I))
+                    {
+                        // TODO: Simply ignoring it may cause some bugs
+                        if (gep->getType()->isPointerTy())
+                        {
+                            if (!allocateChecker(gep, runtimeCheck, builtinCheck))
+                            {
+                                gepOptimized++;
+                            }
+                        }
+                    }
+                    else if (BitCastInst *bc = dyn_cast<BitCastInst>(&I))
+                    {
+                        if (bc->getSrcTy()->isPointerTy() && bc->getDestTy()->isPointerTy())
+                        {
+                            // TODO: Simply ignoring it may cause some bugs
+                            if (!bc->getSrcTy()->getPointerElementType()->isSized() ||
+                                !bc->getDestTy()->getPointerElementType()->isSized())
+                                continue;
+
+                            unsigned int srcSize = DL->getTypeAllocSize(bc->getSrcTy()->getPointerElementType());
+                            unsigned int dstSize = DL->getTypeAllocSize(bc->getDestTy()->getPointerElementType());
+
+                            if (srcSize > dstSize)
+                                continue;
+                            if (!allocateChecker(bc, runtimeCheck, builtinCheck))
+                                bitcastOptimized++;
+                        }
+                    }
+                }
+            }
+        }
+
+        void partialBuiltinOptimize()
+        {
+            for (auto &I : runtimeCheck)
+            {
+                auto src = source[I];
+                if (!cluster.count(src))
+                    cluster[src] = new SmallVector<Instruction *, 16>();
+                cluster[src]->push_back(I);
+            }
+
+            for (auto &[key, value]: cluster) {
+                
+            }
+        }
+
+        void applyInstrument()
+        {
+            for (auto &I : runtimeCheck)
+            {
+                if (isa<GetElementPtrInst>(I))
+                {
+                    gepRuntimeCheck++;
+                    addGepRuntimeCheck(I);
+                }
+                else
+                {
+                    bitcastRuntimeCheck++;
+                    addBitcastRuntimeCheck(I);
+                }
+            }
+
+            for (auto &[I, cond] : builtinCheck)
+            {
+                if (isa<GetElementPtrInst>(I))
+                    gepBuiltinCheck++;
+                else
+                    bitcastBuiltinCheck++;
+
+                addBuiltinCheck(I, cond);
+            }
         }
     };
 }
