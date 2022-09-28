@@ -69,6 +69,7 @@ namespace
 
         SmallVector<Instruction *, 16> runtimeCheck;
         SmallVector<std::pair<Instruction *, Value *>, 16> builtinCheck;
+        SmallVector<std::pair<Value *, SmallVector<Instruction *, 16> *>, 16> partialCheck;
 
         StringRef getPassName() const override
         {
@@ -101,6 +102,12 @@ namespace
                 bitcastOptimized = 0;
                 bitcastBuiltinCheck = 0;
                 bitcastRuntimeCheck = 0;
+
+                source.clear();
+                cluster.clear();
+                runtimeCheck.clear();
+                builtinCheck.clear();
+                partialCheck.clear();
 
                 bindRuntime();
                 hookInstruction();
@@ -442,9 +449,24 @@ namespace
                 cluster[src]->push_back(I);
             }
 
-            for (auto &[key, value]: cluster) {
-                
+            SmallVector<Instruction *, 16> newRuntimeCheck;
+            for (auto &[key, value] : cluster)
+            {
+                int64_t weight = 1;
+                for (auto ins : *value)
+                {
+                    weight += 1;
+                    if (Loop *Lop = LI->getLoopFor(ins->getParent()))
+                        weight += 5;
+                }
+
+                if (weight > 5)
+                    partialCheck.push_back(std::make_pair(key, value));
+                else
+                    newRuntimeCheck.append(*value);
             }
+
+            runtimeCheck.swap(newRuntimeCheck);
         }
 
         void applyInstrument()
