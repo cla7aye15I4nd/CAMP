@@ -163,8 +163,8 @@ namespace
             M->getOrInsertFunction(
                 __BUILTIN_CHECK,
                 FunctionType::get(
-                    voidPointerType,
-                    {voidPointerType, int64Type, int64Type, int64Type},
+                    voidType,
+                    {int64Type, int64Type, int64Type},
                     false));
 
             M->getOrInsertFunction(
@@ -268,7 +268,7 @@ namespace
             assert(InsertPoint != nullptr);
 
             IRBuilder<> irBuilder(InsertPoint);
-            auto base = irBuilder.CreatePointerCast(V, voidPointerType);
+            auto base = irBuilder.CreatePtrToInt(V, int64Type);
             auto size = irBuilder.CreateCall(M->getFunction(__GET_CHUNK_SIZE), {base});
 
             for (auto I : *S)
@@ -276,12 +276,11 @@ namespace
                 irBuilder.SetInsertPoint(I->getNextNode());
                 auto offset = irBuilder.CreateSub(
                     irBuilder.CreatePtrToInt(I, int64Type),
-                    irBuilder.CreatePtrToInt(base, int64Type)
+                    base
                 );
 
                 Value *needsize = ConstantInt::get(int64Type, DL->getTypeAllocSize(I->getType()->getPointerElementType()));
-                irBuilder.CreateCall(M->getFunction(__BUILTIN_CHECK), {
-                    irBuilder.CreatePointerCast(I, voidPointerType), size, offset, needsize});
+                irBuilder.CreateCall(M->getFunction(__BUILTIN_CHECK), {size, offset, needsize});
             }
         }
 
