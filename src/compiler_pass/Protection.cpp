@@ -273,14 +273,22 @@ namespace
 
             for (auto I : *S)
             {
-                irBuilder.SetInsertPoint(I->getNextNode());
+                InsertPoint = I->getNextNode();
+                irBuilder.SetInsertPoint(InsertPoint);
                 auto offset = irBuilder.CreateSub(
                     irBuilder.CreatePtrToInt(I, int64Type),
                     base
                 );
 
                 Value *needsize = ConstantInt::get(int64Type, DL->getTypeAllocSize(I->getType()->getPointerElementType()));
-                irBuilder.CreateCall(M->getFunction(__BUILTIN_CHECK), {size, offset, needsize});
+                Value *Cond =
+                    irBuilder.CreateOr(
+                        irBuilder.CreateICmpSLT(offset, ConstantInt::get(int64Type, 0)),
+                        irBuilder.CreateICmpSLT(size, irBuilder.CreateAdd(offset, needsize))
+                    );
+
+                irBuilder.SetInsertPoint(SplitBlockAndInsertIfThen(Cond, InsertPoint, false));
+                irBuilder.CreateCall(M->getFunction(__REPORT_ERROR), {});
             }
         }
 
