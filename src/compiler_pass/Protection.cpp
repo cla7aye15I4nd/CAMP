@@ -280,7 +280,8 @@ namespace
                 );
 
                 Value *needsize = ConstantInt::get(int64Type, DL->getTypeAllocSize(I->getType()->getPointerElementType()));
-                irBuilder.CreateCall(M->getFunction(__BUILTIN_CHECK), {I, size, offset, needsize});
+                irBuilder.CreateCall(M->getFunction(__BUILTIN_CHECK), {
+                    irBuilder.CreatePointerCast(I, voidPointerType), size, offset, needsize});
             }
         }
 
