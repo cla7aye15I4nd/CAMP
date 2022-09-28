@@ -30,6 +30,7 @@ using namespace llvm;
 #define __BUILTIN_CHECK "tc_builtin_check_boundary"
 #define __REPORT_STATISTIC "tc_report_statistic"
 #define __REPORT_ERROR "tc_report_error"
+#define __GET_CHUNK_SIZE "tc_get_chunk_size"
 
 namespace
 {
@@ -57,9 +58,11 @@ namespace
 
         // Statistic
         int64_t gepOptimized;
+        int64_t gepPartialCheck;
         int64_t gepRuntimeCheck;
         int64_t gepBuiltinCheck;
         int64_t bitcastOptimized;
+        int64_t bitcastPartialCheck;
         int64_t bitcastBuiltinCheck;
         int64_t bitcastRuntimeCheck;
 
@@ -98,9 +101,11 @@ namespace
 
                 gepOptimized = 0;
                 gepRuntimeCheck = 0;
+                gepPartialCheck = 0;
                 gepBuiltinCheck = 0;
                 bitcastOptimized = 0;
                 bitcastBuiltinCheck = 0;
+                bitcastPartialCheck = 0;
                 bitcastRuntimeCheck = 0;
 
                 source.clear();
@@ -175,6 +180,13 @@ namespace
                     voidType,
                     {},
                     false));
+
+            M->getOrInsertFunction(
+                __GET_CHUNK_SIZE,
+                FunctionType::get(
+                    int64Type,
+                    {voidPointerType},
+                    false));
         }
 
         void insertReport()
@@ -205,19 +217,21 @@ namespace
         void report()
         {
             dbgs() << "[REPORT:" << F->getName() << "]\n";
-            if (bitcastOptimized > 0 || bitcastRuntimeCheck > 0 || bitcastBuiltinCheck > 0)
+            if (bitcastOptimized > 0 || bitcastRuntimeCheck > 0 || bitcastPartialCheck > 0 || bitcastBuiltinCheck > 0)
             {
                 dbgs() << "    [BitCast]\n";
                 dbgs() << "        Optimized: " << bitcastOptimized << " \n";
                 dbgs() << "        Runtime Check: " << bitcastRuntimeCheck << " \n";
+                dbgs() << "        Partial Check: " << bitcastPartialCheck << " \n";
                 dbgs() << "        Builtin Check: " << bitcastBuiltinCheck << " \n";
             }
-            if (gepOptimized > 0 || gepRuntimeCheck > 0 || gepBuiltinCheck > 0)
+            if (gepOptimized > 0 || gepRuntimeCheck > 0 || gepPartialCheck > 0 || gepBuiltinCheck > 0)
             {
 
                 dbgs() << "    [GepElementPtr] \n";
                 dbgs() << "        Optimized: " << gepOptimized << " \n";
                 dbgs() << "        Runtime Check: " << gepRuntimeCheck << " \n";
+                dbgs() << "        Partial Check: " << gepPartialCheck << " \n";
                 dbgs() << "        Builtin Check: " << gepBuiltinCheck << " \n";
             }
         }
@@ -240,6 +254,34 @@ namespace
 
             IRBuilder<> irBuilder(SplitBlockAndInsertIfThen(Cond, I->getNextNode(), false));
             irBuilder.CreateCall(M->getFunction(__REPORT_ERROR), {});
+        }
+
+        void addPartialCheck(Value *V, SmallVector<Instruction *, 16> *S)
+        {
+            Instruction *InsertPoint = nullptr;
+
+            if (isa<Instruction>(V))
+                InsertPoint = dyn_cast<Instruction>(V);
+            else if (isa<Argument>(V))
+                InsertPoint = &(F->getEntryBlock().front());
+
+            assert(InsertPoint != nullptr);
+
+            IRBuilder<> irBuilder(InsertPoint);
+            auto base = irBuilder.CreatePointerCast(V, voidPointerType);
+            auto size = irBuilder.CreateCall(M->getFunction(__GET_CHUNK_SIZE), {base});
+
+            for (auto I : *S)
+            {
+                irBuilder.SetInsertPoint(I->getNextNode());
+                auto offset = irBuilder.CreateSub(
+                    irBuilder.CreatePtrToInt(I, int64Type),
+                    irBuilder.CreatePtrToInt(base, int64Type)
+                );
+
+                Value *needsize = ConstantInt::get(int64Type, DL->getTypeAllocSize(I->getType()->getPointerElementType()));
+                irBuilder.CreateCall(M->getFunction(__BUILTIN_CHECK), {I, size, offset, needsize});
+            }
         }
 
         void addGepRuntimeCheck(Instruction *I)
@@ -483,6 +525,17 @@ namespace
                     bitcastRuntimeCheck++;
                     addBitcastRuntimeCheck(I);
                 }
+            }
+
+            for (auto &[V, S] : partialCheck)
+            {
+                for (auto &I : *S)
+                    if (isa<GetElementPtrInst>(I))
+                        gepPartialCheck++;
+                    else
+                        bitcastPartialCheck++;
+
+                addPartialCheck(V, S);
             }
 
             for (auto &[I, cond] : builtinCheck)
