@@ -1,6 +1,3 @@
-[submodule "src/safe_gperftools"]
-	path = src/tcmalloc
-	url = https://github.com/Markakd/safe_gperftools.git
 [submodule "src/safe_tcmalloc"]
 	path = src/safe_tcmalloc
 	url = git@github.com:Markakd/safe_tcmalloc.git
