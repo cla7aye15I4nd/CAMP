@@ -25,12 +25,11 @@ using namespace llvm;
 #define DEBUG_TYPE ""
 
 /* Runttime Function List */
-#define __GEP_CHECK "tc_gep_check_boundary"
-#define __BITCAST_CHECK "tc_bc_check_boundary"
-#define __BUILTIN_CHECK "tc_builtin_check_boundary"
-#define __REPORT_STATISTIC "tc_report_statistic"
-#define __REPORT_ERROR "tc_report_error"
-#define __GET_CHUNK_SIZE "tc_get_chunk_size"
+#define __GEP_CHECK "__gep_check_boundary"
+#define __BITCAST_CHECK "__bc_check_boundary"
+#define __REPORT_STATISTIC "__report_statistic"
+#define __REPORT_ERROR "__report_error"
+#define __GET_CHUNK_SIZE "__get_chunk_size"
 
 namespace
 {
@@ -53,6 +52,7 @@ namespace
 
         // Type Utils
         Type *voidType;
+        Type *int32Type;
         Type *int64Type;
         Type *voidPointerType;
 
@@ -131,7 +131,6 @@ namespace
             static StringSet<> ifunc = {
                 __GEP_CHECK,
                 __BITCAST_CHECK,
-                __BUILTIN_CHECK,
                 __REPORT_STATISTIC,
                 __REPORT_ERROR,
             };
@@ -143,28 +142,22 @@ namespace
         {
             LLVMContext &context = M->getContext();
             voidType = Type::getVoidTy(context);
+            int32Type = Type::getInt32Ty(context);
             int64Type = Type::getInt64Ty(context);
             voidPointerType = Type::getInt8PtrTy(context, 0);
 
             M->getOrInsertFunction(
                 __GEP_CHECK,
                 FunctionType::get(
-                    voidPointerType,
+                    int32Type,
                     {voidPointerType, voidPointerType, int64Type},
                     false));
 
             M->getOrInsertFunction(
                 __BITCAST_CHECK,
                 FunctionType::get(
-                    voidPointerType,
+                    int32Type,
                     {voidPointerType, int64Type},
-                    false));
-
-            M->getOrInsertFunction(
-                __BUILTIN_CHECK,
-                FunctionType::get(
-                    voidType,
-                    {int64Type, int64Type, int64Type},
                     false));
 
             M->getOrInsertFunction(
@@ -185,7 +178,7 @@ namespace
                 __GET_CHUNK_SIZE,
                 FunctionType::get(
                     int64Type,
-                    {voidPointerType},
+                    {int64Type},
                     false));
         }
 
