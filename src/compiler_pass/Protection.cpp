@@ -281,11 +281,9 @@ namespace
                 );
 
                 Value *needsize = ConstantInt::get(int64Type, DL->getTypeAllocSize(I->getType()->getPointerElementType()));
-                Value *Cond =
-                    irBuilder.CreateOr(
-                        irBuilder.CreateICmpSLT(offset, ConstantInt::get(int64Type, 0)),
-                        irBuilder.CreateICmpSLT(size, irBuilder.CreateAdd(offset, needsize))
-                    );
+                Value *Cond = irBuilder.CreateICmpSLT(size, irBuilder.CreateAdd(offset, needsize));
+                if (SE->getSignedRangeMin(SE->getSCEV(offset)).isNegative())
+                    Cond = irBuilder.CreateOr(Cond, irBuilder.CreateICmpSLT(offset, ConstantInt::get(int64Type, 0)));
 
                 irBuilder.SetInsertPoint(SplitBlockAndInsertIfThen(Cond, InsertPoint, false));
                 irBuilder.CreateCall(M->getFunction(__REPORT_ERROR), {});
