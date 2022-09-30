@@ -1,6 +1,7 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/StringSet.h"
+#include "llvm/ADT/SmallSet.h"
 #include "llvm/Pass.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Function.h"
@@ -70,6 +71,7 @@ namespace
         DenseMap<Instruction *, Value *> source;
         DenseMap<Value *, SmallVector<Instruction *, 16> *> cluster;
 
+        SmallSet<Instruction *, 16> escaped;
         SmallVector<Instruction *, 16> runtimeCheck;
         SmallVector<std::pair<Instruction *, Value *>, 16> builtinCheck;
         SmallVector<std::pair<Value *, SmallVector<Instruction *, 16> *>, 16> partialCheck;
@@ -360,6 +362,9 @@ namespace
         {
             assert(Ptr->getType()->isPointerTy() && "allocateChecker(): Ptr should be pointer type");
 
+            if (escaped.count(Ptr) == 0)
+                return false;
+
             SizeOffsetEvalType SizeOffset;
             Value *Or = getBoundsCheckCond(Ptr, SizeOffset);
             ConstantInt *C = dyn_cast_or_null<ConstantInt>(Or);
@@ -451,6 +456,13 @@ namespace
                     if (isa<GetElementPtrInst>(I) || isa<BitCastInst>(I))
                     {
                         findSource(&I);
+                        
+                        for (auto user : I.users()) {
+                            if (isa<LoadInst>(user) || isa<StoreInst>(user) || isa<ReturnInst>(user)) {
+                                escaped.insert(&I);                                
+                                break;
+                            }
+                        }
                     }
                 }
             }
