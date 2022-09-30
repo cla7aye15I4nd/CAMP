@@ -51,6 +51,7 @@ int __attribute__ ((noinline)) Euler(int *is_prime, int n)
         }
     }
 
+    free(prime);
     return cnt;
 }
 
@@ -63,6 +64,7 @@ int main()
         res ^= Eratosthenes(is_prime, n) ^ Euler(is_prime, n);
 
     printf("FLAG: %d\n", res);
+    free(is_prime);
 
     return 0;
 }
