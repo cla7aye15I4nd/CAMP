@@ -29,7 +29,7 @@ using namespace llvm;
 #define __BITCAST_CHECK "__bc_check_boundary"
 #define __REPORT_STATISTIC "__report_statistic"
 #define __REPORT_ERROR "__report_error"
-#define __GET_CHUNK_SIZE "__get_chunk_size"
+#define __GET_CHUNK_END "__get_chunk_end"
 
 namespace
 {
@@ -175,7 +175,7 @@ namespace
                     false));
 
             M->getOrInsertFunction(
-                __GET_CHUNK_SIZE,
+                __GET_CHUNK_END,
                 FunctionType::get(
                     int64Type,
                     {int64Type},
@@ -254,7 +254,7 @@ namespace
             Instruction *InsertPoint = nullptr;
 
             if (isa<Instruction>(V))
-                InsertPoint = dyn_cast<Instruction>(V);
+                InsertPoint = dyn_cast<Instruction>(V)->getNextNode();
             else if (isa<Argument>(V))
                 InsertPoint = &(F->getEntryBlock().front());
 
@@ -262,21 +262,36 @@ namespace
 
             IRBuilder<> irBuilder(InsertPoint);
             auto base = irBuilder.CreatePtrToInt(V, int64Type);
-            auto size = irBuilder.CreateCall(M->getFunction(__GET_CHUNK_SIZE), {base});
+            auto end = irBuilder.CreateCall(M->getFunction(__GET_CHUNK_END), {base});
+
+            int64_t osize = DL->getTypeAllocSize(V->getType()->getPointerElementType());
+            auto realEnd = irBuilder.CreateSub(end, ConstantInt::get(int64Type, osize));
 
             for (auto I : *S)
             {
                 InsertPoint = I->getNextNode();
                 irBuilder.SetInsertPoint(InsertPoint);
-                auto offset = irBuilder.CreateSub(
-                    irBuilder.CreatePtrToInt(I, int64Type),
-                    base
-                );
 
-                Value *needsize = ConstantInt::get(int64Type, DL->getTypeAllocSize(I->getType()->getPointerElementType()));
-                Value *Cond = irBuilder.CreateICmpSLT(size, irBuilder.CreateAdd(offset, needsize));
+                auto Ptr = irBuilder.CreatePtrToInt(I, int64Type);
+                auto offset = irBuilder.CreateSub(Ptr, base);
+
+                Value *Cond = nullptr;
+                int64_t nsize = DL->getTypeAllocSize(I->getType()->getPointerElementType());
+                if (nsize == osize)
+                {
+                    Cond = irBuilder.CreateICmpSLT(realEnd, Ptr);
+                }
+                else
+                {
+                    Value *needsize = ConstantInt::get(int64Type, nsize);
+                    Cond = irBuilder.CreateICmpSLT(irBuilder.CreateSub(base, needsize), Ptr);
+                }
+                
                 if (SE->getSignedRangeMin(SE->getSCEV(offset)).isNegative())
-                    Cond = irBuilder.CreateOr(Cond, irBuilder.CreateICmpSLT(offset, ConstantInt::get(int64Type, 0)));
+                    Cond = irBuilder.CreateOr(Cond, irBuilder.CreateICmpSLT(Ptr, base));
+
+                assert(isa<Instruction>(offset));
+                dyn_cast<Instruction>(offset)->eraseFromParent();
 
                 irBuilder.SetInsertPoint(SplitBlockAndInsertIfThen(Cond, InsertPoint, false));
                 irBuilder.CreateCall(M->getFunction(__REPORT_ERROR), {});
@@ -493,7 +508,7 @@ namespace
             SmallVector<Instruction *, 16> newRuntimeCheck;
             for (auto &[key, value] : cluster)
             {
-                int64_t weight = 1;
+                int64_t weight = 0;
                 for (auto ins : *value)
                 {
                     weight += 1;
@@ -501,7 +516,7 @@ namespace
                         weight += 5;
                 }
 
-                if (weight > 5)
+                if (weight > 3)
                     partialCheck.push_back(std::make_pair(key, value));
                 else
                     newRuntimeCheck.append(*value);
