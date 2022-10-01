@@ -262,8 +262,6 @@ namespace
             else if (isa<GlobalVariable>(V))
                 return;
 
-            if (InsertPoint == nullptr)
-                dbgs() << *V << "\n";
             assert(InsertPoint != nullptr);
 
             IRBuilder<> irBuilder(InsertPoint);
