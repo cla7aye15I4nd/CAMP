@@ -527,6 +527,10 @@ namespace
             SmallVector<Instruction *, 16> newRuntimeCheck;
             for (auto &[key, value] : cluster)
             {
+                // FIXME: Why I need this one?
+                if (isa<PHINode>(key))
+                    continue;
+
                 int64_t weight = 0;
                 for (auto ins : *value)
                 {
