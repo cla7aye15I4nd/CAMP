@@ -286,9 +286,9 @@ namespace
                 else
                 {
                     Value *needsize = ConstantInt::get(int64Type, nsize);
-                    Cond = irBuilder.CreateICmpSLT(irBuilder.CreateSub(base, needsize), Ptr);
+                    Cond = irBuilder.CreateICmpSLT(irBuilder.CreateSub(end, needsize), Ptr);
                 }
-                
+
                 if (SE->getSignedRangeMin(SE->getSCEV(offset)).isNegative())
                     Cond = irBuilder.CreateOr(Cond, irBuilder.CreateICmpSLT(Ptr, base));
 
@@ -372,7 +372,7 @@ namespace
             if (C && !C->getZExtValue())
                 return false;
 
-            // FIXME: The bounds checking has some wired bugs
+            // TODO: Built in optimization is not always better
             if (Or != nullptr)
                 // We need save the `SizeOffset` before instrument.
                 // Because the analysis result will changed after instrument,
@@ -441,7 +441,12 @@ namespace
             }
             if (BitCastInst *bc = dyn_cast<BitCastInst>(V))
             {
-                return source[bc] = findSource(bc->getOperand(0));
+                Value *S = findSource(bc->getOperand(0));
+                if (CallInst *C = dyn_cast<CallInst>(S))
+                    if (escaped.count(bc) == 0)
+                        return bc; // It is a peephole, optimization
+
+                return source[bc] = S;
             }
 
             return V;
@@ -450,22 +455,22 @@ namespace
         void collectInformation()
         {
             for (BasicBlock &BB : *F)
-            {
                 for (Instruction &I : BB)
-                {
                     if (isa<GetElementPtrInst>(I) || isa<BitCastInst>(I))
                     {
-                        findSource(&I);
-                        
-                        for (auto user : I.users()) {
-                            if (isa<LoadInst>(user) || isa<StoreInst>(user) || isa<ReturnInst>(user)) {
-                                escaped.insert(&I);                                
+                        for (auto user : I.users())
+                        {
+                            if (isa<LoadInst>(user) || isa<StoreInst>(user) || isa<ReturnInst>(user))
+                            {
+                                escaped.insert(&I);
                                 break;
                             }
                         }
                     }
-                }
-            }
+
+            for (BasicBlock &BB : *F)
+                for (Instruction &I : BB)
+                    findSource(&I);
         }
 
         void builtinOptimize()
@@ -497,7 +502,7 @@ namespace
                             unsigned int srcSize = DL->getTypeAllocSize(bc->getSrcTy()->getPointerElementType());
                             unsigned int dstSize = DL->getTypeAllocSize(bc->getDestTy()->getPointerElementType());
 
-                            if (srcSize > dstSize)
+                            if (srcSize == dstSize)
                                 continue;
                             if (!allocateChecker(bc, runtimeCheck, builtinCheck))
                                 bitcastOptimized++;
