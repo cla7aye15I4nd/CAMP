@@ -264,7 +264,7 @@ namespace
             }
             else if (isa<Argument>(V))
                 InsertPoint = &(F->getEntryBlock().front());
-            else if (isa<GlobalVariable>(V))
+            else if (isa<GlobalVariable>(V) || isa<Operator>(V))
                 return;
 
             if (InsertPoint == nullptr)
