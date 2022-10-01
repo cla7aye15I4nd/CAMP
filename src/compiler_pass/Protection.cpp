@@ -259,7 +259,11 @@ namespace
                 InsertPoint = dyn_cast<Instruction>(V)->getNextNode();
             else if (isa<Argument>(V))
                 InsertPoint = &(F->getEntryBlock().front());
+            else if (isa<GlobalVariable>(V))
+                return;
 
+            if (InsertPoint == nullptr)
+                dbgs() << *V << "\n";
             assert(InsertPoint != nullptr);
 
             IRBuilder<> irBuilder(InsertPoint);
