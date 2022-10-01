@@ -255,13 +255,20 @@ namespace
         {
             Instruction *InsertPoint = nullptr;
 
-            if (isa<Instruction>(V))
+            if (isa<Instruction>(V)) {
                 InsertPoint = dyn_cast<Instruction>(V)->getNextNode();
+
+                // FIXME: Invoke Instruction
+                if (InsertPoint == nullptr)
+                    return;
+            }
             else if (isa<Argument>(V))
                 InsertPoint = &(F->getEntryBlock().front());
             else if (isa<GlobalVariable>(V))
                 return;
 
+            if (InsertPoint == nullptr)
+                errs() << "Insert Point: " << *V << "\n";
             assert(InsertPoint != nullptr);
 
             IRBuilder<> irBuilder(InsertPoint);
