@@ -255,7 +255,8 @@ namespace
         {
             Instruction *InsertPoint = nullptr;
 
-            if (isa<Instruction>(V)) {
+            if (isa<Instruction>(V))
+            {
                 InsertPoint = dyn_cast<Instruction>(V)->getNextNode();
 
                 // FIXME: Invoke Instruction
@@ -275,8 +276,14 @@ namespace
             auto base = irBuilder.CreatePtrToInt(V, int64Type);
             auto end = irBuilder.CreateCall(M->getFunction(__GET_CHUNK_END), {base});
 
-            int64_t osize = DL->getTypeAllocSize(V->getType()->getPointerElementType());
-            auto realEnd = irBuilder.CreateSub(end, ConstantInt::get(int64Type, osize));
+            int64_t osize = -1;
+            Value *realEnd = nullptr;
+
+            if (V->getType()->getPointerElementType()->isSized())
+            {
+                osize = DL->getTypeAllocSize(V->getType()->getPointerElementType());
+                realEnd = irBuilder.CreateSub(end, ConstantInt::get(int64Type, osize));
+            }
 
             for (auto I : *S)
             {
