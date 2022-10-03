@@ -10,7 +10,7 @@ struct state_t
 
 void search(struct state_t *state, int depth)
 {
-    int tmp = ++state->count1;
+    __int64_t tmp = ++state->count1;
     state->count1 += state->count2;
     state->count2 += state->count3;
     state->count3 += tmp;
