@@ -256,20 +256,12 @@ namespace
             Instruction *InsertPoint = nullptr;
 
             if (isa<Instruction>(V))
-            {
                 InsertPoint = dyn_cast<Instruction>(V)->getNextNode();
-
-                // FIXME: Invoke Instruction
-                if (InsertPoint == nullptr)
-                    return;
-            }
             else if (isa<Argument>(V))
                 InsertPoint = &(F->getEntryBlock().front());
-            else if (isa<GlobalVariable>(V) || isa<Operator>(V))
+            else if (isa<Operator>(V))
                 return;
 
-            if (InsertPoint == nullptr)
-                errs() << "Insert Point: " << *V << "\n";
             assert(InsertPoint != nullptr);
 
             IRBuilder<> irBuilder(InsertPoint);
@@ -377,6 +369,12 @@ namespace
         bool allocateChecker(Instruction *Ptr, SmallVector<Instruction *, 16> &runtimeCheck, SmallVector<std::pair<Instruction *, Value *>, 16> &builtinCheck)
         {
             assert(Ptr->getType()->isPointerTy() && "allocateChecker(): Ptr should be pointer type");
+
+            if (isa<GlobalValue>(source[Ptr]))
+                return false;
+
+            if (isa<AllocaInst>(source[Ptr]))
+                return false;
 
             if (escaped.count(Ptr) == 0)
                 return false;
