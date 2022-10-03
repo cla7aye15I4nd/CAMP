@@ -49,6 +49,7 @@ namespace
         ScalarEvolution *SE;
         ObjectSizeOffsetEvaluator *OSOE;
         DominatorTree *DT;
+        PostDominatorTree *PDT;
         LoopInfo *LI;
 
         // Type Utils
@@ -100,6 +101,7 @@ namespace
                 EvalOpts.RoundToAlign = true;
                 OSOE = new ObjectSizeOffsetEvaluator(*DL, TLI, F.getContext(), EvalOpts);
                 DT = new DominatorTree(F);
+                PDT = new PostDominatorTree(F);
 
                 gepOptimized = 0;
                 gepRuntimeCheck = 0;
@@ -370,11 +372,13 @@ namespace
         {
             assert(Ptr->getType()->isPointerTy() && "allocateChecker(): Ptr should be pointer type");
 
-            if (isa<GlobalValue>(source[Ptr]))
-                return false;
+            if (source.count(Ptr)) {
+                if (isa<GlobalValue>(source[Ptr]))
+                    return false;
 
-            if (isa<AllocaInst>(source[Ptr]))
-                return false;
+                if (isa<AllocaInst>(source[Ptr]))
+                    return false;
+            }
 
             if (escaped.count(Ptr) == 0)
                 return false;
@@ -543,6 +547,7 @@ namespace
                 if (isa<PHINode>(key))
                     continue;
 
+                dependenceOptimize(key, value);
                 int64_t weight = 0;
                 for (auto ins : *value)
                 {
@@ -558,6 +563,65 @@ namespace
             }
 
             runtimeCheck.swap(newRuntimeCheck);
+        }
+
+        void dependenceOptimize(Value *key, SmallVector<Instruction *, 16> *value)
+        {
+            Instruction *InsertPoint = nullptr;
+
+            if (isa<Instruction>(key))
+                InsertPoint = dyn_cast<Instruction>(key)->getNextNode();
+            else if (isa<Argument>(key))
+                InsertPoint = &(F->getEntryBlock().front());
+            else if (isa<Operator>(key))
+                return;
+
+            IRBuilder<> irBuilder(InsertPoint);
+            auto base = irBuilder.CreatePtrToInt(key, int64Type);
+
+            SmallVector<Instruction *, 16> newvalue;
+            for (size_t i = 0; i < value->size(); ++i)
+            {
+                bool optimized = false;
+                auto I = (*value)[i];
+
+                irBuilder.SetInsertPoint(I->getNextNode());
+                auto ptr_I = irBuilder.CreatePtrToInt(I, int64Type);
+                auto offset_I = irBuilder.CreateSub(ptr_I, base);
+                if (!SE->getSignedRangeMin(SE->getSCEV(offset_I)).isNegative())
+                {
+                    for (size_t j = 0; j < value->size() && !optimized; ++j)
+                    {
+                        if (i != j)
+                        {
+                            auto J = (*value)[j];
+                            if (DT->dominates(J, I) || PDT->dominates(I, J))
+                            {
+                                irBuilder.SetInsertPoint(J->getNextNode());
+                                auto ptr_J = irBuilder.CreatePtrToInt(J, int64Type);
+                                auto offset_J = irBuilder.CreateSub(ptr_J, ptr_I);
+                                if (!SE->getSignedRangeMin(SE->getSCEV(offset_J)).isNegative())
+                                    optimized = true;
+                                dyn_cast<Instruction>(ptr_J)->eraseFromParent();
+                                dyn_cast<Instruction>(offset_J)->eraseFromParent();
+                            }
+                        }
+                    }
+                }
+                dyn_cast<Instruction>(ptr_I)->eraseFromParent();
+                dyn_cast<Instruction>(offset_I)->eraseFromParent();
+                if (optimized)
+                {
+                    if (isa<GetElementPtrInst>(I))
+                        gepOptimized++;
+                    if (isa<BitCastInst>(I))
+                        bitcastOptimized++;
+                }
+                else
+                    newvalue.push_back(I);
+            }
+            dyn_cast<Instruction>(base)->eraseFromParent();
+            value->swap(newvalue);
         }
 
         void applyInstrument()
