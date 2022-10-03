@@ -1,6 +1,7 @@
 set(CMAKE_C_COMPILER ${CMAKE_SOURCE_DIR}/tools/vcc)
 set(CMAKE_CXX_COMPILER ${CMAKE_SOURCE_DIR}/tools/v++)
 
+add_executable(recursive recursive.c)
 add_executable(loop     loop.c)
 add_executable(pressure pressure.c)
 add_executable(prime    prime.cpp)
