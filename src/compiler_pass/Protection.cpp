@@ -25,12 +25,13 @@ using namespace llvm;
 
 #define DEBUG_TYPE ""
 
-/* Runttime Function List */
+/* Runtime Function List */
 #define __GEP_CHECK "__gep_check_boundary"
 #define __BITCAST_CHECK "__bc_check_boundary"
 #define __REPORT_STATISTIC "__report_statistic"
 #define __REPORT_ERROR "__report_error"
 #define __GET_CHUNK_END "__get_chunk_end"
+#define __ESCAPE "__escape"
 
 namespace
 {
@@ -67,6 +68,7 @@ namespace
         int64_t bitcastPartialCheck;
         int64_t bitcastBuiltinCheck;
         int64_t bitcastRuntimeCheck;
+        int64_t escapeTrace;
 
         // Instruction
         DenseMap<Instruction *, Value *> source;
@@ -76,6 +78,8 @@ namespace
         SmallVector<Instruction *, 16> runtimeCheck;
         SmallVector<std::pair<Instruction *, Value *>, 16> builtinCheck;
         SmallVector<std::pair<Value *, SmallVector<Instruction *, 16> *>, 16> partialCheck;
+
+        SmallVector<StoreInst *, 16> storeInsts;
 
         StringRef getPassName() const override
         {
@@ -111,12 +115,14 @@ namespace
                 bitcastBuiltinCheck = 0;
                 bitcastPartialCheck = 0;
                 bitcastRuntimeCheck = 0;
+                escapeTrace = 0;
 
                 source.clear();
                 cluster.clear();
                 runtimeCheck.clear();
                 builtinCheck.clear();
                 partialCheck.clear();
+                storeInsts.clear();
 
                 bindRuntime();
                 hookInstruction();
@@ -137,6 +143,8 @@ namespace
                 __BITCAST_CHECK,
                 __REPORT_STATISTIC,
                 __REPORT_ERROR,
+                __GET_CHUNK_END,
+                __ESCAPE,
             };
 
             return ifunc.count(name) != 0;
@@ -184,6 +192,13 @@ namespace
                     int64Type,
                     {int64Type},
                     false));
+
+            M->getOrInsertFunction(
+                __ESCAPE,
+                FunctionType::get(
+                    voidType,
+                    {voidPointerType, voidPointerType},
+                    false));
         }
 
         void insertReport()
@@ -230,6 +245,11 @@ namespace
                 dbgs() << "        Runtime Check: " << gepRuntimeCheck << " \n";
                 dbgs() << "        Partial Check: " << gepPartialCheck << " \n";
                 dbgs() << "        Builtin Check: " << gepBuiltinCheck << " \n";
+            }
+            if (escapeTrace > 0)
+            {
+                dbgs() << "    [Escape]\n";
+                dbgs() << "        Escape Trace: " << escapeTrace << " \n";
             }
         }
 
@@ -318,8 +338,7 @@ namespace
 
                 After:
                     %result  = gep %base %offset
-                    %masked = __gep_check(%base, %result, size)
-                    then replace all %result with %masked
+                    __gep_check(%base, %result, size)
             */
             auto gep = dyn_cast_or_null<GetElementPtrInst>(I);
             assert(gep != nullptr && "addGepRuntimeCheck: Require GetElementPtrInst");
@@ -348,8 +367,7 @@ namespace
 
                 After:
                     %dst = bitcast %src ty1 ty2
-                    %masked = __bitcast_check(%dst, size)
-                    then replace all %dst with %masked
+                    __bitcast_check(%dst, size)
             */
 
             auto bc = dyn_cast_or_null<BitCastInst>(I);
@@ -368,11 +386,20 @@ namespace
             //                       { return U.getUser() != ptr && U.getUser() != masked; });
         }
 
+        void addEscape(StoreInst *SI)
+        {
+            IRBuilder<> irBuilder(SI);
+            irBuilder.CreateCall(M->getFunction(__ESCAPE),
+                                 {irBuilder.CreatePointerCast(SI->getPointerOperand(), voidPointerType),
+                                  irBuilder.CreatePointerCast(SI->getValueOperand(), voidPointerType)});
+        }
+
         bool allocateChecker(Instruction *Ptr, SmallVector<Instruction *, 16> &runtimeCheck, SmallVector<std::pair<Instruction *, Value *>, 16> &builtinCheck)
         {
             assert(Ptr->getType()->isPointerTy() && "allocateChecker(): Ptr should be pointer type");
 
-            if (source.count(Ptr)) {
+            if (source.count(Ptr))
+            {
                 if (isa<GlobalValue>(source[Ptr]))
                     return false;
 
@@ -392,7 +419,7 @@ namespace
 
             // TODO: Built in optimization is not always better
             if (Or != nullptr)
-                // We need save the `SizeOffset` before instrument.
+                // We need save the `Cond` before instrument.
                 // Because the analysis result will changed after instrument,
                 // but our instrument will not change the semantic.
                 builtinCheck.push_back(std::make_pair(Ptr, Or));
@@ -484,6 +511,11 @@ namespace
                                 break;
                             }
                         }
+                    }
+                    else if (StoreInst SI = dyn_cast<StoreInst>(I))
+                    {
+                        if (SI->getValueOperand()->getType()->isPointerTy())
+                            storeInst.push_back(SI);
                     }
 
             for (BasicBlock &BB : *F)
@@ -659,6 +691,12 @@ namespace
                     bitcastBuiltinCheck++;
 
                 addBuiltinCheck(I, cond);
+            }
+
+            for (auto SI : storeInst)
+            {
+                escapeTrace++;
+                addEscape(SI);
             }
         }
     };
