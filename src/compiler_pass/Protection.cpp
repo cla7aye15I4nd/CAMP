@@ -512,10 +512,10 @@ namespace
                             }
                         }
                     }
-                    else if (StoreInst SI = dyn_cast<StoreInst>(I))
+                    else if (StoreInst *SI = dyn_cast<StoreInst>(&I))
                     {
                         if (SI->getValueOperand()->getType()->isPointerTy())
-                            storeInst.push_back(SI);
+                            storeInsts.push_back(SI);
                     }
 
             for (BasicBlock &BB : *F)
@@ -693,7 +693,7 @@ namespace
                 addBuiltinCheck(I, cond);
             }
 
-            for (auto SI : storeInst)
+            for (auto SI : storeInsts)
             {
                 escapeTrace++;
                 addEscape(SI);
