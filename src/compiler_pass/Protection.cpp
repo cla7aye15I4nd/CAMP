@@ -21,6 +21,7 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
+#include "config.h"
 using namespace llvm;
 
 #define DEBUG_TYPE ""
@@ -276,8 +277,9 @@ namespace
             collectInformation();
 
             builtinOptimize();
+#if CONFIG_ENABLE_OOB_OPTIMIZATION
             partialBuiltinOptimize();
-
+#endif
             applyInstrument();
         }
 
@@ -711,6 +713,7 @@ namespace
 
         void applyInstrument()
         {
+#if CONFIG_ENABLE_OOB_CHECK
             for (auto &I : runtimeCheck)
             {
                 if (isa<GetElementPtrInst>(I))
@@ -745,12 +748,14 @@ namespace
 
                 addBuiltinCheck(I, cond);
             }
-
+#endif
+#if CONFIG_ENABLE_UAF_CHECK
             for (auto SI : storeInsts)
             {
                 escapeTrace++;
                 addEscape(SI);
             }
+#endif
         }
     };
 }

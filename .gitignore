@@ -36,3 +36,6 @@ build
 
 # VSCode
 .vscode
+
+# Config
+.config

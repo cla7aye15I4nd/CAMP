@@ -1,0 +1,16 @@
+config ENABLE_UAF_CHECK
+	bool "Enable UAF check"
+	default y
+
+config ENABLE_OOB_CHECK
+	bool "Enable OOB check"
+	default y
+
+config ENABLE_OOB_OPTIMIZATION
+	bool "Enable OOB optimization"
+	depends on ENABLE_OOB_CHECK
+	default y
+
+config ENABLE_REPORT
+	bool "Enable report"
+	default y
