@@ -204,34 +204,35 @@ namespace
         void insertReport()
         {
             SmallVector<Instruction *, 16> returns;
-	    SmallVector<Instruction *, 16> calls;
+            SmallVector<Instruction *, 16> calls;
             for (BasicBlock &BB : *F)
-                for (Instruction &I : BB) 
-		{
+                for (Instruction &I : BB)
+                {
                     if (ReturnInst *ret = dyn_cast<ReturnInst>(&I))
                         returns.push_back(ret);
-		    if (CallInst *call = dyn_cast<CallInst>(&I))
-			calls.push_back(call);
-		}
+                    if (CallInst *call = dyn_cast<CallInst>(&I))
+                        calls.push_back(call);
+                }
 
             for (auto ret : returns)
             {
                 IRBuilder<> irBuilder(ret);
                 irBuilder.CreateCall(M->getFunction(__REPORT_STATISTIC));
             }
-        	
-	    // Avoid directly call exit(status) in main() function, instead of return, like 600.perlbench_s 
-	    for (auto I: calls)
-	    {
-		CallInst *call = dyn_cast<CallInst>(I);
-	    	Function *fp = call->getCalledFunction();;
-		if(fp->getName() == "exit")
-		{
-			IRBuilder<> irBuilder(call);
-                	irBuilder.CreateCall(M->getFunction(__REPORT_STATISTIC));
-		}
-	    }
-	}
+
+            // Avoid directly call exit(status) in main() function, instead of return, like 600.perlbench_s
+            for (auto I : calls)
+            {
+                CallInst *call = dyn_cast<CallInst>(I);
+                Function *fp = call->getCalledFunction();
+                ;
+                if (fp->getName() == "exit")
+                {
+                    IRBuilder<> irBuilder(call);
+                    irBuilder.CreateCall(M->getFunction(__REPORT_STATISTIC));
+                }
+            }
+        }
 
         void getAnalysisUsage(AnalysisUsage &AU) const override
         {
