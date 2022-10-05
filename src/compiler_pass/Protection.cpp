@@ -225,8 +225,8 @@ namespace
             {
                 CallInst *call = dyn_cast<CallInst>(I);
                 Function *fp = call->getCalledFunction();
-                ;
-                if (fp->getName() == "exit")
+                
+                if (fp != nullptr && fp->getName() == "exit")
                 {
                     IRBuilder<> irBuilder(call);
                     irBuilder.CreateCall(M->getFunction(__REPORT_STATISTIC));
@@ -281,13 +281,48 @@ namespace
             applyInstrument();
         }
 
+        static Instruction *getInsertionPointAfterDef(Instruction *I)
+        {
+            assert(!I->getType()->isVoidTy() && "Instruction must define result");
+
+            BasicBlock *InsertBB;
+            BasicBlock::iterator InsertPt;
+            if (auto *PN = dyn_cast<PHINode>(I))
+            {
+                InsertBB = PN->getParent();
+                InsertPt = InsertBB->getFirstInsertionPt();
+            }
+            else if (auto *II = dyn_cast<InvokeInst>(I))
+            {
+                InsertBB = II->getNormalDest();
+                InsertPt = InsertBB->getFirstInsertionPt();
+            }
+            else if (auto *CB = dyn_cast<CallBrInst>(I))
+            {
+                InsertBB = CB->getDefaultDest();
+                InsertPt = InsertBB->getFirstInsertionPt();
+            }
+            else
+            {
+                assert(!I->isTerminator() && "Only invoke/callbr terminators return value");
+                InsertBB = I->getParent();
+                InsertPt = std::next(I->getIterator());
+            }
+
+            // catchswitch blocks don't have any legal insertion point (because they
+            // are both an exception pad and a terminator).
+            if (InsertPt == InsertBB->end())
+                return nullptr;
+            return &*InsertPt;
+        }
+
         void addBuiltinCheck(Instruction *I, Value *Cond)
         {
             /*
                 llvm/lib/Transforms/Instrumentation/BoundsChecking.cpp
             */
 
-            IRBuilder<> irBuilder(SplitBlockAndInsertIfThen(Cond, I->getNextNode(), false));
+            IRBuilder<> irBuilder(SplitBlockAndInsertIfThen(Cond, getInsertionPointAfterDef(I), false));
             irBuilder.CreateCall(M->getFunction(__REPORT_ERROR), {});
         }
 
@@ -296,7 +331,7 @@ namespace
             Instruction *InsertPoint = nullptr;
 
             if (isa<Instruction>(V))
-                InsertPoint = dyn_cast<Instruction>(V)->getNextNode();
+                InsertPoint = getInsertionPointAfterDef(dyn_cast<Instruction>(V));
             else if (isa<Argument>(V))
                 InsertPoint = &(F->getEntryBlock().front());
             else if (isa<Operator>(V))
@@ -319,7 +354,7 @@ namespace
 
             for (auto I : *S)
             {
-                InsertPoint = I->getNextNode();
+                InsertPoint = getInsertionPointAfterDef(I);
                 irBuilder.SetInsertPoint(InsertPoint);
 
                 auto Ptr = irBuilder.CreatePtrToInt(I, int64Type);
@@ -363,7 +398,7 @@ namespace
 
             uint64_t typeSize = DL->getTypeAllocSize(gep->getType()->getPointerElementType());
 
-            IRBuilder<> irBuilder(gep->getNextNode());
+            IRBuilder<> irBuilder(getInsertionPointAfterDef(gep));
 
             Value *base = irBuilder.CreatePointerCast(gep->getPointerOperand(), voidPointerType);
             Value *result = irBuilder.CreatePointerCast(gep, voidPointerType);
@@ -391,7 +426,7 @@ namespace
             auto bc = dyn_cast_or_null<BitCastInst>(I);
             assert(bc != nullptr && "addBitcastRuntimeCheck: Require BitCastInst");
 
-            IRBuilder<> irBuilder(bc->getNextNode());
+            IRBuilder<> irBuilder(getInsertionPointAfterDef(bc));
 
             Value *ptr = irBuilder.CreatePointerCast(bc, voidPointerType);
             Value *size = irBuilder.getInt64(DL->getTypeAllocSize(bc->getDestTy()->getPointerElementType()));
@@ -594,8 +629,8 @@ namespace
             for (auto &[key, value] : cluster)
             {
                 // FIXME: Why I need this one?
-                if (isa<PHINode>(key))
-                    continue;
+                // if (isa<PHINode>(key))
+                //     continue;
 
                 dependenceOptimize(key, value);
                 int64_t weight = 0;
@@ -620,7 +655,7 @@ namespace
             Instruction *InsertPoint = nullptr;
 
             if (isa<Instruction>(key))
-                InsertPoint = dyn_cast<Instruction>(key)->getNextNode();
+                InsertPoint = getInsertionPointAfterDef(dyn_cast<Instruction>(key));
             else if (isa<Argument>(key))
                 InsertPoint = &(F->getEntryBlock().front());
             else if (isa<Operator>(key))
@@ -635,7 +670,7 @@ namespace
                 bool optimized = false;
                 auto I = (*value)[i];
 
-                irBuilder.SetInsertPoint(I->getNextNode());
+                irBuilder.SetInsertPoint(getInsertionPointAfterDef(I));
                 auto ptr_I = irBuilder.CreatePtrToInt(I, int64Type);
                 auto offset_I = irBuilder.CreateSub(ptr_I, base);
                 if (!SE->getSignedRangeMin(SE->getSCEV(offset_I)).isNegative())
@@ -647,7 +682,7 @@ namespace
                             auto J = (*value)[j];
                             if (DT->dominates(J, I) || PDT->dominates(I, J))
                             {
-                                irBuilder.SetInsertPoint(J->getNextNode());
+                                irBuilder.SetInsertPoint(getInsertionPointAfterDef(J));
                                 auto ptr_J = irBuilder.CreatePtrToInt(J, int64Type);
                                 auto offset_J = irBuilder.CreateSub(ptr_J, ptr_I);
                                 if (!SE->getSignedRangeMin(SE->getSCEV(offset_J)).isNegative())
