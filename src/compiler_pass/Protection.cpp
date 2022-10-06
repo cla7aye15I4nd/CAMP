@@ -336,8 +336,6 @@ namespace
                 InsertPoint = getInsertionPointAfterDef(dyn_cast<Instruction>(V));
             else if (isa<Argument>(V))
                 InsertPoint = &(F->getEntryBlock().front());
-            else if (isa<Operator>(V))
-                return;
 
             assert(InsertPoint != nullptr);
 
@@ -630,9 +628,8 @@ namespace
             SmallVector<Instruction *, 16> newRuntimeCheck;
             for (auto &[key, value] : cluster)
             {
-                // FIXME: Why I need this one?
-                // if (isa<PHINode>(key))
-                //     continue;
+                if (isa<Operator>(key))
+                    continue;
 
                 dependenceOptimize(key, value);
                 int64_t weight = 0;
@@ -659,9 +656,7 @@ namespace
             if (isa<Instruction>(key))
                 InsertPoint = getInsertionPointAfterDef(dyn_cast<Instruction>(key));
             else if (isa<Argument>(key))
-                InsertPoint = &(F->getEntryBlock().front());
-            else if (isa<Operator>(key))
-                return;
+                InsertPoint = &(F->getEntryBlock().front());            
 
             IRBuilder<> irBuilder(InsertPoint);
             auto base = irBuilder.CreatePtrToInt(key, int64Type);
