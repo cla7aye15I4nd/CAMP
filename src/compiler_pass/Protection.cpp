@@ -226,7 +226,7 @@ namespace
             {
                 CallInst *call = dyn_cast<CallInst>(I);
                 Function *fp = call->getCalledFunction();
-                
+
                 if (fp != nullptr && fp->getName() == "exit")
                 {
                     IRBuilder<> irBuilder(call);
@@ -460,6 +460,13 @@ namespace
                     return false;
             }
 
+            if (GetElementPtrInst *Gep = dyn_cast<GetElementPtrInst>(Ptr))
+            {
+                Type *ty = Gep->getPointerOperand()->getType()->getPointerElementType();
+                if (ty->isSized() && ty->isStructTy())
+                    return false;
+            }
+
             if (escaped.count(Ptr) == 0)
                 return false;
 
@@ -656,7 +663,7 @@ namespace
             if (isa<Instruction>(key))
                 InsertPoint = getInsertionPointAfterDef(dyn_cast<Instruction>(key));
             else if (isa<Argument>(key))
-                InsertPoint = &(F->getEntryBlock().front());            
+                InsertPoint = &(F->getEntryBlock().front());
 
             IRBuilder<> irBuilder(InsertPoint);
             auto base = irBuilder.CreatePtrToInt(key, int64Type);
