@@ -248,7 +248,7 @@ namespace
         void report()
         {
             dbgs() << "[REPORT:" << F->getName() << "]\n";
-            if (bitcastOptimized > 0 || bitcastRuntimeCheck > 0 || bitcastPartialCheck > 0 || bitcastBuiltinCheck > 0)
+            if (bitcastRuntimeCheck > 0 || bitcastPartialCheck > 0 || bitcastBuiltinCheck > 0)
             {
                 dbgs() << "    [BitCast]\n";
                 dbgs() << "        Optimized: " << bitcastOptimized << " \n";
@@ -256,7 +256,7 @@ namespace
                 dbgs() << "        Partial Check: " << bitcastPartialCheck << " \n";
                 dbgs() << "        Builtin Check: " << bitcastBuiltinCheck << " \n";
             }
-            if (gepOptimized > 0 || gepRuntimeCheck > 0 || gepPartialCheck > 0 || gepBuiltinCheck > 0)
+            if (gepRuntimeCheck > 0 || gepPartialCheck > 0 || gepBuiltinCheck > 0)
             {
 
                 dbgs() << "    [GepElementPtr] \n";
