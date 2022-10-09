@@ -647,7 +647,7 @@ namespace
                         weight += 5;
                 }
 
-                if (weight > 3)
+                if (weight > 1)
                     partialCheck.push_back(std::make_pair(key, value));
                 else
                     newRuntimeCheck.append(*value);
