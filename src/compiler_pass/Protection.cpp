@@ -463,7 +463,7 @@ namespace
             if (GetElementPtrInst *Gep = dyn_cast<GetElementPtrInst>(Ptr))
             {
                 Type *ty = Gep->getPointerOperand()->getType()->getPointerElementType();
-                if (ty->isSized() && ty->isStructTy())
+                if (isSizedStruct(ty))
                     return false;
             }
 
@@ -486,6 +486,21 @@ namespace
             else
                 runtimeCheck.push_back(Ptr);
             return true;
+        }
+
+        bool isSizedStruct(Type *ty)
+        {
+            if (StructType *sty = dyn_cast<StructType>(ty))
+            {
+                assert(!sty->isOpaque());
+                if (!sty->isSized())
+                    return false;
+                if (ArrayType *aty = dyn_cast<ArrayType>(sty->elements().back()))
+                    return aty->getNumElements() != 0;
+                return true;
+            }
+
+            return false;
         }
 
         Value *getBoundsCheckCond(Instruction *Ptr, SizeOffsetEvalType &SizeOffset)
