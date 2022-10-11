@@ -17,4 +17,4 @@ exec clang -O1 -Xclang -load -Xclang ${BASE}/build/src/compiler_pass/libProtecti
         "$@" \
         -L${BASE}/build/src/safe_tcmalloc/tcmalloc -ltcmalloc_tcmalloc \
         -Qunused-arguments \
-        -Wpointer-arith
+        -Wpointer-arith -Wpointer-to-int-cast
