@@ -31,7 +31,7 @@ using namespace llvm;
 #define __BITCAST_CHECK "__bc_check_boundary"
 #define __REPORT_STATISTIC "__report_statistic"
 #define __REPORT_ERROR "__report_error"
-#define __GET_CHUNK_END "__get_chunk_end"
+#define __GET_CHUNK_RANGE "__get_chunk_range"
 #define __ESCAPE "__escape"
 
 namespace
@@ -59,6 +59,7 @@ namespace
         Type *int32Type;
         Type *int64Type;
         Type *voidPointerType;
+        Type *int64PointerType;
 
         // Statistic
         int64_t gepOptimized;
@@ -144,7 +145,7 @@ namespace
                 __BITCAST_CHECK,
                 __REPORT_STATISTIC,
                 __REPORT_ERROR,
-                __GET_CHUNK_END,
+                __GET_CHUNK_RANGE,
                 __ESCAPE,
             };
 
@@ -158,6 +159,7 @@ namespace
             int32Type = Type::getInt32Ty(context);
             int64Type = Type::getInt64Ty(context);
             voidPointerType = Type::getInt8PtrTy(context, 0);
+            int64PointerType = Type::getInt64PtrTy(context, 0);
 
             M->getOrInsertFunction(
                 __GEP_CHECK,
@@ -188,10 +190,10 @@ namespace
                     false));
 
             M->getOrInsertFunction(
-                __GET_CHUNK_END,
+                __GET_CHUNK_RANGE,
                 FunctionType::get(
                     int64Type,
-                    {int64Type},
+                    {int64Type, int64PointerType},
                     false));
 
             M->getOrInsertFunction(
@@ -340,8 +342,11 @@ namespace
             assert(InsertPoint != nullptr);
 
             IRBuilder<> irBuilder(InsertPoint);
-            auto base = irBuilder.CreatePtrToInt(V, int64Type);
-            auto end = irBuilder.CreateCall(M->getFunction(__GET_CHUNK_END), {base});
+            auto ptr = irBuilder.CreatePtrToInt(V, int64Type);
+
+            auto base_ptr = irBuilder.CreateAlloca(int64Type);
+            auto end = irBuilder.CreateCall(M->getFunction(__GET_CHUNK_RANGE), {ptr, base_ptr});
+            auto base = irBuilder.CreateLoad(base_ptr);
 
             int64_t osize = -1;
             Value *realEnd = nullptr;
