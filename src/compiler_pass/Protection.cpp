@@ -658,16 +658,22 @@ namespace
                 if (isa<Operator>(key))
                     continue;
 
-                dependenceOptimize(key, value);
-                int64_t weight = 0;
+                Instruction* InsertPoint = dependenceOptimize(key, value);
+                int64_t weight = 0, dom = 0;
                 for (auto ins : *value)
                 {
-                    weight += 1;
-                    if (Loop *Lop = LI->getLoopFor(ins->getParent()))
-                        weight += 5;
+                    if (ins->getParent() == InsertPoint->getParent()) {
+                        dom += 1;
+                        if (Loop *Lop = LI->getLoopFor(ins->getParent()))
+                            dom += 5;
+                    } else {
+                        weight += 1;
+                        if (Loop *Lop = LI->getLoopFor(ins->getParent()))
+                            weight += 5;
+                    }
                 }
 
-                if (weight > 1)
+                if (dom > 1 || weight > 2)
                     partialCheck.push_back(std::make_pair(key, value));
                 else
                     newRuntimeCheck.append(*value);
@@ -676,7 +682,7 @@ namespace
             runtimeCheck.swap(newRuntimeCheck);
         }
 
-        void dependenceOptimize(Value *key, SmallVector<Instruction *, 16> *value)
+        Instruction* dependenceOptimize(Value *key, SmallVector<Instruction *, 16> *value)
         {
             Instruction *InsertPoint = nullptr;
 
@@ -731,6 +737,8 @@ namespace
             }
             dyn_cast<Instruction>(base)->eraseFromParent();
             value->swap(newvalue);
+
+            return InsertPoint;
         }
 
         void applyInstrument()
