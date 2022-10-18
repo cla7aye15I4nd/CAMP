@@ -71,6 +71,7 @@ namespace
         int64_t bitcastBuiltinCheck;
         int64_t bitcastRuntimeCheck;
         int64_t escapeTrace;
+        int64_t escapeOptimized;
 
         // Instruction
         DenseMap<Instruction *, Value *> source;
@@ -118,6 +119,7 @@ namespace
                 bitcastPartialCheck = 0;
                 bitcastRuntimeCheck = 0;
                 escapeTrace = 0;
+                escapeOptimized = 0;
 
                 source.clear();
                 cluster.clear();
@@ -270,6 +272,7 @@ namespace
             if (escapeTrace > 0)
             {
                 dbgs() << "    [Escape]\n";
+                dbgs() << "        Escape Optimized: " << escapeOptimized << " \n";
                 dbgs() << "        Escape Trace: " << escapeTrace << " \n";
             }
         }
@@ -463,8 +466,8 @@ namespace
             // which is true for x64
             Value *rsp = readRegister(IRB, "rsp");
             Value *cond = IRB.CreateICmpULT(SI->getValueOperand(), rsp);
-// #define STACK_LOC
-#ifdef STACK_LOC
+// #define ESCAPE_STACK_LOC
+#ifndef ESCAPE_STACK_LOC
             Value *cond_loc = IRB.CreateICmpULT(SI->getPointerOperand(), rsp);
             cond = IRB.CreateAnd(cond, cond_loc);
 #endif
@@ -804,6 +807,24 @@ namespace
 #if CONFIG_ENABLE_UAF_CHECK
             for (auto SI : storeInsts)
             {
+                if (isa<AllocaInst>(SI->getValueOperand())
+                        || isa<AllocaInst>(SI->getPointerOperand())) {
+                    escapeOptimized++;
+                    continue;
+                }
+
+                Instruction *ptr = dyn_cast<Instruction>(SI->getValueOperand());
+                Instruction *loc = dyn_cast<Instruction>(SI->getPointerOperand());
+                if (source.count(ptr) && isa<AllocaInst>(source[ptr])) {
+                    escapeOptimized++;
+                    continue;
+                }
+#ifndef ESCAPE_STACK_LOC
+                if (source.count(loc) && isa<AllocaInst>(source[loc])) {
+                    escapeOptimized++;
+                    continue;
+                }
+#endif
                 escapeTrace++;
                 addEscape(SI);
             }
