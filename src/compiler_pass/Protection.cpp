@@ -466,6 +466,9 @@ namespace
             // which is true for x64
             Value *rsp = readRegister(IRB, "rsp");
             Value *cond = IRB.CreateICmpULT(SI->getValueOperand(), rsp);
+            Value *cond_null = IRB.CreateICmpNE(SI->getValueOperand(),
+                                    Constant::getNullValue(voidPointerType));
+            cond = IRB.CreateAnd(cond, cond_null);
 // #define ESCAPE_STACK_LOC
 #ifndef ESCAPE_STACK_LOC
             Value *cond_loc = IRB.CreateICmpULT(SI->getPointerOperand(), rsp);
@@ -808,7 +811,8 @@ namespace
             for (auto SI : storeInsts)
             {
                 if (isa<AllocaInst>(SI->getValueOperand())
-                        || isa<AllocaInst>(SI->getPointerOperand())) {
+                        || isa<AllocaInst>(SI->getPointerOperand())
+                        || isa<ConstantPointerNull>(SI->getValueOperand())) {
                     escapeOptimized++;
                     continue;
                 }
