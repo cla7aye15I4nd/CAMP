@@ -201,7 +201,7 @@ namespace
             M->getOrInsertFunction(
                 __ESCAPE,
                 FunctionType::get(
-                    voidType,
+                    int32Type,
                     {voidPointerType, voidPointerType},
                     false));
         }
