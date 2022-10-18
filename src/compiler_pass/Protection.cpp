@@ -459,9 +459,15 @@ namespace
         {
             IRBuilder<> IRB(SI);
             // x64 only
+            // we assume that heap can only be mapped blow the stack
+            // which is true for x64
             Value *rsp = readRegister(IRB, "rsp");
             Value *cond = IRB.CreateICmpULT(SI->getValueOperand(), rsp);
-
+// #define STACK_LOC
+#ifdef STACK_LOC
+            Value *cond_loc = IRB.CreateICmpULT(SI->getPointerOperand(), rsp);
+            cond = IRB.CreateAnd(cond, cond_loc);
+#endif
             IRB.SetInsertPoint(SplitBlockAndInsertIfThen(cond, SI, false));
             IRB.CreateCall(M->getFunction(__ESCAPE),
                                  {IRB.CreatePointerCast(SI->getPointerOperand(), voidPointerType),
