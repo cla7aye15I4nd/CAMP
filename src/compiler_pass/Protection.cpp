@@ -467,7 +467,7 @@ namespace
             Value *rsp = readRegister(IRB, "rsp");
             Value *cond = IRB.CreateICmpULT(SI->getValueOperand(), rsp);
             Value *cond_null = IRB.CreateICmpNE(SI->getValueOperand(),
-                                    Constant::getNullValue(voidPointerType));
+                                    Constant::getNullValue(SI->getValueOperand()->getType()));
             cond = IRB.CreateAnd(cond, cond_null);
 // #define ESCAPE_STACK_LOC
 #ifndef ESCAPE_STACK_LOC
