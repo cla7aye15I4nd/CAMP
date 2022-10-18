@@ -444,12 +444,28 @@ namespace
             //                       { return U.getUser() != ptr && U.getUser() != masked; });
         }
 
+        Value *readRegister(IRBuilder<> &IRB, StringRef Name)
+        {
+            Module *M = IRB.GetInsertBlock()->getParent()->getParent();
+            Function *ReadRegister =
+                Intrinsic::getDeclaration(M, Intrinsic::read_register, IRB.getIntPtrTy(*DL));
+            LLVMContext *C = &(M->getContext());
+            MDNode *MD = MDNode::get(*C, {MDString::get(*C, Name)});
+            Value *Args[] = {MetadataAsValue::get(*C, MD)};
+            return IRB.CreateCall(ReadRegister, Args);
+        }
+
         void addEscape(StoreInst *SI)
         {
-            IRBuilder<> irBuilder(SI);
-            irBuilder.CreateCall(M->getFunction(__ESCAPE),
-                                 {irBuilder.CreatePointerCast(SI->getPointerOperand(), voidPointerType),
-                                  irBuilder.CreatePointerCast(SI->getValueOperand(), voidPointerType)});
+            IRBuilder<> IRB(SI);
+            // x64 only
+            Value *rsp = readRegister(IRB, "rsp");
+            Value *cond = IRB.CreateICmpULT(SI->getValueOperand(), rsp);
+
+            IRB.SetInsertPoint(SplitBlockAndInsertIfThen(cond, SI, false));
+            IRB.CreateCall(M->getFunction(__ESCAPE),
+                                 {IRB.CreatePointerCast(SI->getPointerOperand(), voidPointerType),
+                                  IRB.CreatePointerCast(SI->getValueOperand(), voidPointerType)});
         }
 
         bool allocateChecker(Instruction *Ptr, SmallVector<Instruction *, 16> &runtimeCheck, SmallVector<std::pair<Instruction *, Value *>, 16> &builtinCheck)
