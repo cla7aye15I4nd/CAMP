@@ -795,22 +795,14 @@ namespace
             {
                 bool flag = false;
                 if (auto I = dyn_cast<Instruction>(SI->getValueOperand()))
-                {
                     if (source.count(I))
-                    {
                         if (LoadInst *LI = dyn_cast<LoadInst>(source[I]))
-                        {
-                            if (LI->getPointerOperand() == SI->getPointerOperand()) {
+                            if (LI->getPointerOperand() == SI->getPointerOperand())
                                 flag = true;
-                            }
-                        }
-                    }
-                }
-                if (flag) {
+                if (flag)
                     escapeOptimized++;
-                } else {
+                else
                     newStoreInsts.push_back(SI);
-                }
             }
             storeInsts.swap(newStoreInsts);
         }
