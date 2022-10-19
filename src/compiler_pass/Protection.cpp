@@ -285,6 +285,7 @@ namespace
 #if CONFIG_ENABLE_OOB_OPTIMIZATION
             partialBuiltinOptimize();
 #endif
+            escapeOptimize();
             applyInstrument();
         }
 
@@ -412,12 +413,7 @@ namespace
             Value *result = irBuilder.CreatePointerCast(gep, voidPointerType);
             Value *size = irBuilder.getInt64(typeSize);
 
-            Value *masked = irBuilder.CreatePointerCast(
-                irBuilder.CreateCall(M->getFunction(__GEP_CHECK), {base, result, size}),
-                gep->getType());
-
-            // gep->replaceUsesWithIf(masked, [result, masked](Use &U)
-            //                        { return U.getUser() != result && U.getUser() != masked; });
+            irBuilder.CreateCall(M->getFunction(__GEP_CHECK), {base, result, size});
         }
 
         void addBitcastRuntimeCheck(Instruction *I)
@@ -439,45 +435,40 @@ namespace
             Value *ptr = irBuilder.CreatePointerCast(bc, voidPointerType);
             Value *size = irBuilder.getInt64(DL->getTypeAllocSize(bc->getDestTy()->getPointerElementType()));
 
-            Value *masked = irBuilder.CreatePointerCast(
-                irBuilder.CreateCall(M->getFunction(__BITCAST_CHECK), {ptr, size}),
-                bc->getType());
-
-            // bc->replaceUsesWithIf(masked, [ptr, masked](Use &U)
-            //                       { return U.getUser() != ptr && U.getUser() != masked; });
+            irBuilder.CreateCall(M->getFunction(__BITCAST_CHECK), {ptr, size});
         }
 
         Value *readRegister(IRBuilder<> &IRB, StringRef Name)
         {
-            Module *M = IRB.GetInsertBlock()->getParent()->getParent();
-            Function *ReadRegister =
-                Intrinsic::getDeclaration(M, Intrinsic::read_register, IRB.getIntPtrTy(*DL));
-            LLVMContext *C = &(M->getContext());
-            MDNode *MD = MDNode::get(*C, {MDString::get(*C, Name)});
-            Value *Args[] = {MetadataAsValue::get(*C, MD)};
-            return IRB.CreateCall(ReadRegister, Args);
+            Function *readReg = Intrinsic::getDeclaration(M, Intrinsic::read_register, IRB.getIntPtrTy(*DL));
+
+            LLVMContext &context = M->getContext();
+            MDNode *MD = MDNode::get(context, {MDString::get(context, Name)});
+            return IRB.CreateCall(readReg, {MetadataAsValue::get(context, MD)});
         }
 
         void addEscape(StoreInst *SI)
         {
             IRBuilder<> IRB(SI);
-            // x64 only
-            // we assume that heap can only be mapped blow the stack
-            // which is true for x64
+
+            // x86-64 only
+            // heap address < stack address
+
             Value *rsp = readRegister(IRB, "rsp");
-            Value *cond = IRB.CreateICmpULT(SI->getValueOperand(), rsp);
-            Value *cond_null = IRB.CreateICmpNE(SI->getValueOperand(),
-                                    Constant::getNullValue(SI->getValueOperand()->getType()));
-            cond = IRB.CreateAnd(cond, cond_null);
-// #define ESCAPE_STACK_LOC
-#ifndef ESCAPE_STACK_LOC
-            Value *cond_loc = IRB.CreateICmpULT(SI->getPointerOperand(), rsp);
-            cond = IRB.CreateAnd(cond, cond_loc);
+
+            Value *value = IRB.CreatePtrToInt(SI->getValueOperand(), int64Type);
+            Value *valueOnStack = IRB.CreateICmpULT(value, rsp);
+            Value *valueIsNull = IRB.CreateICmpNE(value, Constant::getNullValue(int64Type));
+
+            Value *cond = IRB.CreateAnd(valueOnStack, valueIsNull);
+#if CONFIG_DISABLE_ESCAPE_STACK_LOC
+            Value *locOnStack = IRB.CreateICmpULT(IRB.CreatePtrToInt(SI->getPointerOperand(), int64Type), rsp);
+            cond = IRB.CreateAnd(cond, locOnStack);
 #endif
             IRB.SetInsertPoint(SplitBlockAndInsertIfThen(cond, SI, false));
             IRB.CreateCall(M->getFunction(__ESCAPE),
-                                 {IRB.CreatePointerCast(SI->getPointerOperand(), voidPointerType),
-                                  IRB.CreatePointerCast(SI->getValueOperand(), voidPointerType)});
+                           {IRB.CreatePointerCast(SI->getPointerOperand(), voidPointerType),
+                            IRB.CreatePointerCast(SI->getValueOperand(), voidPointerType)});
         }
 
         bool allocateChecker(Instruction *Ptr, SmallVector<Instruction *, 16> &runtimeCheck, SmallVector<std::pair<Instruction *, Value *>, 16> &builtinCheck)
@@ -623,7 +614,31 @@ namespace
                     else if (StoreInst *SI = dyn_cast<StoreInst>(&I))
                     {
                         if (SI->getValueOperand()->getType()->isPointerTy())
+                        {
+                            if (isa<AllocaInst>(SI->getValueOperand()) || isa<ConstantPointerNull>(SI->getValueOperand()))
+                            {
+                                escapeOptimized++;
+                                continue;
+                            }
+
+                            Instruction *ptr = dyn_cast_or_null<Instruction>(SI->getValueOperand());
+                            if (ptr && source.count(ptr) && isa<AllocaInst>(source[ptr]))
+                            {
+                                escapeOptimized++;
+                                continue;
+                            }
+#if CONFIG_DISABLE_ESCAPE_STACK_LOC
+
+                            Instruction *loc = dyn_cast_or_null<Instruction>(SI->getPointerOperand());
+                            if (loc && source.count(loc) &&
+                                (isa<AllocaInst>(source[loc]) || isa<AllocaInst>(SI->getPointerOperand())))
+                            {
+                                escapeOptimized++;
+                                continue;
+                            }
+#endif
                             storeInsts.push_back(SI);
+                        }
                     }
 
             for (BasicBlock &BB : *F)
@@ -686,15 +701,18 @@ namespace
                 if (isa<Operator>(key))
                     continue;
 
-                Instruction* InsertPoint = dependenceOptimize(key, value);
+                Instruction *InsertPoint = dependenceOptimize(key, value);
                 int64_t weight = 0, dom = 0;
                 for (auto ins : *value)
                 {
-                    if (ins->getParent() == InsertPoint->getParent()) {
+                    if (ins->getParent() == InsertPoint->getParent())
+                    {
                         dom += 1;
                         if (Loop *Lop = LI->getLoopFor(ins->getParent()))
                             dom += 5;
-                    } else {
+                    }
+                    else
+                    {
                         weight += 1;
                         if (Loop *Lop = LI->getLoopFor(ins->getParent()))
                             weight += 5;
@@ -710,7 +728,7 @@ namespace
             runtimeCheck.swap(newRuntimeCheck);
         }
 
-        Instruction* dependenceOptimize(Value *key, SmallVector<Instruction *, 16> *value)
+        Instruction *dependenceOptimize(Value *key, SmallVector<Instruction *, 16> *value)
         {
             Instruction *InsertPoint = nullptr;
 
@@ -769,6 +787,34 @@ namespace
             return InsertPoint;
         }
 
+        void escapeOptimize()
+        {
+            SmallVector<StoreInst *, 16> newStoreInsts;
+
+            for (auto *SI : storeInsts)
+            {
+                bool flag = false;
+                if (auto I = dyn_cast<Instruction>(SI->getValueOperand()))
+                {
+                    if (source.count(I))
+                    {
+                        if (LoadInst *LI = dyn_cast<LoadInst>(source[I]))
+                        {
+                            if (LI->getPointerOperand() == SI->getPointerOperand()) {
+                                flag = true;
+                            }
+                        }
+                    }
+                }
+                if (flag) {
+                    escapeOptimized++;
+                } else {
+                    newStoreInsts.push_back(SI);
+                }
+            }
+            storeInsts.swap(newStoreInsts);
+        }
+
         void applyInstrument()
         {
 #if CONFIG_ENABLE_OOB_CHECK
@@ -810,21 +856,22 @@ namespace
 #if CONFIG_ENABLE_UAF_CHECK
             for (auto SI : storeInsts)
             {
-                if (isa<AllocaInst>(SI->getValueOperand())
-                        || isa<AllocaInst>(SI->getPointerOperand())
-                        || isa<ConstantPointerNull>(SI->getValueOperand())) {
+                if (isa<AllocaInst>(SI->getValueOperand()) || isa<AllocaInst>(SI->getPointerOperand()) || isa<ConstantPointerNull>(SI->getValueOperand()))
+                {
                     escapeOptimized++;
                     continue;
                 }
 
                 Instruction *ptr = dyn_cast<Instruction>(SI->getValueOperand());
                 Instruction *loc = dyn_cast<Instruction>(SI->getPointerOperand());
-                if (source.count(ptr) && isa<AllocaInst>(source[ptr])) {
+                if (source.count(ptr) && isa<AllocaInst>(source[ptr]))
+                {
                     escapeOptimized++;
                     continue;
                 }
-#ifndef ESCAPE_STACK_LOC
-                if (source.count(loc) && isa<AllocaInst>(source[loc])) {
+#if CONFIG_DISABLE_ESCAPE_STACK_LOC
+                if (source.count(loc) && isa<AllocaInst>(source[loc]))
+                {
                     escapeOptimized++;
                     continue;
                 }
