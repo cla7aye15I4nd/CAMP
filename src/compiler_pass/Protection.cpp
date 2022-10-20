@@ -33,6 +33,7 @@ using namespace llvm;
 #define __REPORT_ERROR "__report_error"
 #define __GET_CHUNK_RANGE "__get_chunk_range"
 #define __ESCAPE "__escape"
+#define __ESCAPE_WORKER "__start_escape_worker"
 
 namespace
 {
@@ -149,6 +150,7 @@ namespace
                 __REPORT_ERROR,
                 __GET_CHUNK_RANGE,
                 __ESCAPE,
+                __ESCAPE_WORKER,
             };
 
             return ifunc.count(name) != 0;
@@ -204,12 +206,24 @@ namespace
                     int32Type,
                     {voidPointerType, voidPointerType},
                     false));
+            
+            M->getOrInsertFunction(
+                __ESCAPE_WORKER,
+                FunctionType::get(
+                    voidType,
+                    {},
+                    false));
         }
 
         void insertReport()
         {
             SmallVector<Instruction *, 16> returns;
             SmallVector<Instruction *, 16> calls;
+
+            Instruction &entry = F->getEntryBlock().front();
+            IRBuilder<> irBuilder(&entry);
+            irBuilder.CreateCall(M->getFunction(__ESCAPE_WORKER));
+
             for (BasicBlock &BB : *F)
                 for (Instruction &I : BB)
                 {
