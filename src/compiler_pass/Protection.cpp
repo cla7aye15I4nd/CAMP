@@ -330,7 +330,7 @@ namespace
                 llvm/lib/Transforms/Instrumentation/BoundsChecking.cpp
             */
 
-            IRBuilder<> irBuilder(SplitBlockAndInsertIfThen(Cond, getInsertionPointAfterDef(I), false));
+            IRBuilder<> irBuilder(SplitBlockAndInsertIfThen(Cond, fetchBestInsertPoint(I), false));
             irBuilder.CreateCall(M->getFunction(__REPORT_ERROR), {});
         }
 
@@ -363,7 +363,7 @@ namespace
 
             for (auto I : *S)
             {
-                InsertPoint = getInsertionPointAfterDef(I);
+                InsertPoint = fetchBestInsertPoint(I);
                 irBuilder.SetInsertPoint(InsertPoint);
 
                 auto Ptr = irBuilder.CreatePtrToInt(I, int64Type);
@@ -407,7 +407,7 @@ namespace
 
             uint64_t typeSize = DL->getTypeAllocSize(gep->getType()->getPointerElementType());
 
-            IRBuilder<> irBuilder(getInsertionPointAfterDef(gep));
+            IRBuilder<> irBuilder(fetchBestInsertPoint(gep));
 
             Value *base = irBuilder.CreatePointerCast(gep->getPointerOperand(), voidPointerType);
             Value *result = irBuilder.CreatePointerCast(gep, voidPointerType);
@@ -430,12 +430,29 @@ namespace
             auto bc = dyn_cast_or_null<BitCastInst>(I);
             assert(bc != nullptr && "addBitcastRuntimeCheck: Require BitCastInst");
 
-            IRBuilder<> irBuilder(getInsertionPointAfterDef(bc));
+            IRBuilder<> irBuilder(fetchBestInsertPoint(bc));
 
             Value *ptr = irBuilder.CreatePointerCast(bc, voidPointerType);
             Value *size = irBuilder.getInt64(DL->getTypeAllocSize(bc->getDestTy()->getPointerElementType()));
 
             irBuilder.CreateCall(M->getFunction(__BITCAST_CHECK), {ptr, size});
+        }
+
+        Instruction *fetchBestInsertPoint(Instruction *I)
+        {
+            User *U = nullptr;
+            for (auto user : I->users())
+            {
+                if (isEscapeInstruction(user))
+                {
+                    if (U != nullptr)
+                        return getInsertionPointAfterDef(I);
+                    U = user;
+                }
+            }
+
+            Instruction *P = dyn_cast_or_null<Instruction>(U);
+            return P != nullptr ? P: getInsertionPointAfterDef(I);
         }
 
         Value *readRegister(IRBuilder<> &IRB, StringRef Name)
@@ -604,7 +621,7 @@ namespace
                     {
                         for (auto user : I.users())
                         {
-                            if (isa<LoadInst>(user) || isa<StoreInst>(user) || isa<ReturnInst>(user))
+                            if (isEscapeInstruction(user))
                             {
                                 escaped.insert(&I);
                                 break;
@@ -644,6 +661,11 @@ namespace
             for (BasicBlock &BB : *F)
                 for (Instruction &I : BB)
                     findSource(&I);
+        }
+
+        bool isEscapeInstruction(User *I)
+        {
+            return isa<LoadInst>(I) || isa<StoreInst>(I) || isa<ReturnInst>(I) || isa<CallInst>(I);
         }
 
         void builtinOptimize()
