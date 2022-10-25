@@ -452,7 +452,7 @@ namespace
             }
 
             Instruction *P = dyn_cast_or_null<Instruction>(U);
-            return P != nullptr ? P: getInsertionPointAfterDef(I);
+            return (P != nullptr && !isa<PHINode>(P)) ? P: getInsertionPointAfterDef(I);
         }
 
         Value *readRegister(IRBuilder<> &IRB, StringRef Name)
@@ -665,7 +665,9 @@ namespace
 
         bool isEscapeInstruction(User *I)
         {
-            return isa<LoadInst>(I) || isa<StoreInst>(I) || isa<ReturnInst>(I) || isa<CallInst>(I);
+            return 
+                isa<LoadInst>(I) || isa<StoreInst>(I) || 
+                isa<ReturnInst>(I) || isa<CallBase>(I) || isa<PHINode>(I);
         }
 
         void builtinOptimize()
