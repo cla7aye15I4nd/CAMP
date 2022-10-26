@@ -330,7 +330,7 @@ namespace
                 llvm/lib/Transforms/Instrumentation/BoundsChecking.cpp
             */
 
-            IRBuilder<> irBuilder(SplitBlockAndInsertIfThen(Cond, fetchBestInsertPoint(I), false));
+            IRBuilder<> irBuilder(SplitBlockAndInsertIfThen(Cond, fetchBestInsertPoint(I), true));
             irBuilder.CreateCall(M->getFunction(__REPORT_ERROR), {});
         }
 
@@ -387,7 +387,7 @@ namespace
                 assert(isa<Instruction>(offset));
                 dyn_cast<Instruction>(offset)->eraseFromParent();
 
-                irBuilder.SetInsertPoint(SplitBlockAndInsertIfThen(Cond, InsertPoint, false));
+                irBuilder.SetInsertPoint(SplitBlockAndInsertIfThen(Cond, InsertPoint, true));
                 irBuilder.CreateCall(M->getFunction(__REPORT_ERROR), {});
             }
         }
@@ -452,7 +452,7 @@ namespace
             }
 
             Instruction *P = dyn_cast_or_null<Instruction>(U);
-            return (P != nullptr && !isa<PHINode>(P)) ? P: getInsertionPointAfterDef(I);
+            return (P != nullptr && !isa<PHINode>(P)) ? P : getInsertionPointAfterDef(I);
         }
 
         Value *readRegister(IRBuilder<> &IRB, StringRef Name)
@@ -665,9 +665,8 @@ namespace
 
         bool isEscapeInstruction(User *I)
         {
-            return 
-                isa<LoadInst>(I) || isa<StoreInst>(I) || 
-                isa<ReturnInst>(I) || isa<CallBase>(I) || isa<PHINode>(I);
+            return isa<LoadInst>(I) || isa<StoreInst>(I) ||
+                   isa<ReturnInst>(I) || isa<CallBase>(I) || isa<PHINode>(I);
         }
 
         void builtinOptimize()
