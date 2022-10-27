@@ -745,6 +745,9 @@ namespace
             SmallVector<Instruction *, 16> newRuntimeCheck;
             for (auto &[key, value] : cluster)
             {
+                if (isa<BitCastOperator>(key))
+                    continue;
+                    
                 Instruction *InsertPoint = dependenceOptimize(key, value);
                 int64_t weight = 0, dom = 0;
                 for (auto ins : *value)
