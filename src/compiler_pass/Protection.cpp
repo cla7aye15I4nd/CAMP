@@ -74,7 +74,7 @@ namespace
         int64_t escapeOptimized;
 
         // Instruction
-        DenseMap<Instruction *, Value *> source;
+        DenseMap<Value *, Value *> source;
         DenseMap<Value *, SmallVector<Instruction *, 16> *> cluster;
 
         SmallSet<Instruction *, 16> escaped;
@@ -492,15 +492,6 @@ namespace
         {
             assert(Ptr->getType()->isPointerTy() && "allocateChecker(): Ptr should be pointer type");
 
-            if (source.count(Ptr))
-            {
-                if (isa<GlobalValue>(source[Ptr]))
-                    return false;
-
-                if (isa<AllocaInst>(source[Ptr]))
-                    return false;
-            }
-
             if (GetElementPtrInst *Gep = dyn_cast<GetElementPtrInst>(Ptr))
             {
                 Type *ty = Gep->getPointerOperand()->getType()->getPointerElementType();
@@ -518,6 +509,10 @@ namespace
             if (C && !C->getZExtValue())
                 return false;
 
+            SmallSet<Value *, 16> Visit;
+            if (!isHeapAddress(Ptr, Visit))
+                return false;
+
             // TODO: Built in optimization is not always better
             if (Or != nullptr)
                 // We need save the `Cond` before instrument.
@@ -526,6 +521,31 @@ namespace
                 builtinCheck.push_back(std::make_pair(Ptr, Or));
             else
                 runtimeCheck.push_back(Ptr);
+            return true;
+        }
+
+        bool isHeapAddress(Value *Ptr, SmallSet<Value *, 16> &Visit)
+        {
+            Value *S = findSource(Ptr);
+            if (isa<GlobalValue>(S) ||
+                isa<AllocaInst>(S))
+                return false;
+
+            if (Visit.count(S))
+                return false;
+
+            Visit.insert(S);
+
+            if (auto PN = dyn_cast<PHINode>(S))
+            {
+                for (int i = 0; i < PN->getNumIncomingValues(); ++i)
+                {
+                    Value *V = PN->getIncomingValue(i);
+                    if (isHeapAddress(V, Visit))
+                        return true;
+                }
+                return false;
+            }
             return true;
         }
 
@@ -608,6 +628,10 @@ namespace
                         return bc; // It is a peephole, optimization
 
                 return source[bc] = S;
+            }
+            if (GEPOperator *gepo = dyn_cast<GEPOperator>(V))
+            {
+                return findSource(gepo->getPointerOperand());
             }
 
             return V;
@@ -698,7 +722,7 @@ namespace
                             unsigned int srcSize = DL->getTypeAllocSize(bc->getSrcTy()->getPointerElementType());
                             unsigned int dstSize = DL->getTypeAllocSize(bc->getDestTy()->getPointerElementType());
 
-                            if (srcSize == dstSize)
+                            if (srcSize >= dstSize)
                                 continue;
                             if (!allocateChecker(bc, runtimeCheck, builtinCheck))
                                 bitcastOptimized++;
@@ -721,9 +745,6 @@ namespace
             SmallVector<Instruction *, 16> newRuntimeCheck;
             for (auto &[key, value] : cluster)
             {
-                if (isa<Operator>(key))
-                    continue;
-
                 Instruction *InsertPoint = dependenceOptimize(key, value);
                 int64_t weight = 0, dom = 0;
                 for (auto ins : *value)
@@ -731,8 +752,6 @@ namespace
                     if (ins->getParent() == InsertPoint->getParent())
                     {
                         dom += 1;
-                        if (Loop *Lop = LI->getLoopFor(ins->getParent()))
-                            dom += 5;
                     }
                     else
                     {
