@@ -10,11 +10,21 @@ if [ $# -eq 0 ]
     exit 0
 fi
 
+source ${BASE}/src/safe_tcmalloc/.config
+
+if [ "$ENABLE_GPROF" = "y" ] 
+    then
+	FLAGS="${BASE}/build/src/safe_tcmalloc/tcmalloc/static/libtcmalloc.a -g -pg -pthread"
+    else 
+	FLAGS="-L${BASE}/build/src/safe_tcmalloc/tcmalloc -ltcmalloc_tcmalloc"
+fi
+
 # The optimization level must be greater than -O0,
 # otherwise some analysis methods cannot be enabled.
 # But over-optimization (O2 or higher) can lead to changes in semantics.
 exec clang++ -O1 -Xclang -load -Xclang ${BASE}/build/src/compiler_pass/libProtectionPass.so \
         "$@" \
-        -L${BASE}/build/src/safe_tcmalloc/tcmalloc -ltcmalloc_tcmalloc \
-        -Qunused-arguments \
-        -Wpointer-arith -Wpointer-to-int-cast
+        ${FLAGS} \
+	-Wl,-rpath,${BASE}/build/src/safe_tcmalloc/tcmalloc \
+	-Qunused-arguments \
+        -Wpointer-arith -Wpointer-to-int-cast \
