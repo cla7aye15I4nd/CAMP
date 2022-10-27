@@ -632,6 +632,13 @@ namespace
                     {
                         if (SI->getValueOperand()->getType()->isPointerTy())
                         {
+#if CONFIG_ENABLE_ESCAPE_TYPE_ONLY
+                            if (!cast<PointerType>(SI->getValueOperand()->getType())->getElementType()->isStructTy())
+                            {
+                                escapeOptimized++;
+                                continue;
+                            }
+#endif
                             if (isa<AllocaInst>(SI->getValueOperand()) || isa<ConstantPointerNull>(SI->getValueOperand()))
                             {
                                 escapeOptimized++;
