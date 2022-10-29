@@ -345,10 +345,12 @@ namespace
 
             assert(InsertPoint != nullptr);
 
-            IRBuilder<> irBuilder(InsertPoint);
-            auto ptr = irBuilder.CreatePtrToInt(V, int64Type);
-
+            IRBuilder<> irBuilder(&F->getEntryBlock().front());
             auto base_ptr = irBuilder.CreateAlloca(int64Type);
+
+            irBuilder.SetInsertPoint(InsertPoint);
+
+            auto ptr = irBuilder.CreatePtrToInt(V, int64Type);
             auto end = irBuilder.CreateCall(M->getFunction(__GET_CHUNK_RANGE), {ptr, base_ptr});
             auto base = irBuilder.CreateLoad(base_ptr);
 
