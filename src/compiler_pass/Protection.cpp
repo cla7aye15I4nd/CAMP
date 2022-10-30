@@ -897,26 +897,6 @@ namespace
 #if CONFIG_ENABLE_UAF_CHECK
             for (auto SI : storeInsts)
             {
-                if (isa<AllocaInst>(SI->getValueOperand()) || isa<AllocaInst>(SI->getPointerOperand()) || isa<ConstantPointerNull>(SI->getValueOperand()))
-                {
-                    escapeOptimized++;
-                    continue;
-                }
-
-                Instruction *ptr = dyn_cast<Instruction>(SI->getValueOperand());
-                Instruction *loc = dyn_cast<Instruction>(SI->getPointerOperand());
-                if (source.count(ptr) && isa<AllocaInst>(source[ptr]))
-                {
-                    escapeOptimized++;
-                    continue;
-                }
-#if CONFIG_DISABLE_ESCAPE_STACK_LOC
-                if (source.count(loc) && isa<AllocaInst>(source[loc]))
-                {
-                    escapeOptimized++;
-                    continue;
-                }
-#endif
                 escapeTrace++;
                 addEscape(SI);
             }
