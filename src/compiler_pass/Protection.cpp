@@ -445,7 +445,7 @@ namespace
             User *U = nullptr;
             for (auto user : I->users())
             {
-                if (isEscapeInstruction(user))
+                if (isMustEscapeInstruction(user))
                 {
                     if (U != nullptr)
                         return getInsertionPointAfterDef(I);
@@ -454,7 +454,7 @@ namespace
             }
 
             Instruction *P = dyn_cast_or_null<Instruction>(U);
-            return (P != nullptr && !isa<PHINode>(P)) ? P : getInsertionPointAfterDef(I);
+            return P != nullptr ? P : getInsertionPointAfterDef(I);
         }
 
         Value *readRegister(IRBuilder<> &IRB, StringRef Name)
@@ -624,12 +624,7 @@ namespace
             }
             if (BitCastInst *bc = dyn_cast<BitCastInst>(V))
             {
-                Value *S = findSource(bc->getOperand(0));
-                if (CallInst *C = dyn_cast<CallInst>(S))
-                    if (escaped.count(bc) == 0)
-                        return bc; // It is a peephole, optimization
-
-                return source[bc] = S;
+                return source[bc] = findSource(bc->getOperand(0));
             }
             if (GEPOperator *gepo = dyn_cast<GEPOperator>(V))
             {
@@ -647,7 +642,8 @@ namespace
                     {
                         for (auto user : I.users())
                         {
-                            if (isEscapeInstruction(user))
+                            SmallSet<Instruction *, 16> Visit;
+                            if (isEscaped(dyn_cast<Instruction>(user), Visit))
                             {
                                 escaped.insert(&I);
                                 break;
@@ -689,10 +685,25 @@ namespace
                     findSource(&I);
         }
 
-        bool isEscapeInstruction(User *I)
+        bool isMustEscapeInstruction(User *I)
         {
-            return isa<LoadInst>(I) || isa<StoreInst>(I) ||
-                   isa<ReturnInst>(I) || isa<CallBase>(I) || isa<PHINode>(I);
+            return isa<LoadInst>(I) || isa<StoreInst>(I) || isa<ReturnInst>(I) || isa<CallBase>(I);
+        }
+
+        bool isEscaped(Instruction *I, SmallSet<Instruction *, 16> &Visit)
+        {
+            if (Visit.count(I))
+                return false;
+
+            Visit.insert(I);
+            for (auto user : I->users())
+                if (isMustEscapeInstruction(I))
+                    return true;
+            for (auto user : I->users())
+                if (auto PN = dyn_cast<PHINode>(user))
+                    if (isEscaped(PN, Visit))
+                        return true;
+            return false;
         }
 
         void builtinOptimize()
@@ -747,7 +758,8 @@ namespace
             SmallVector<Instruction *, 16> newRuntimeCheck;
             for (auto &[key, value] : cluster)
             {
-                if (isa<BitCastOperator>(key)) {
+                if (isa<BitCastOperator>(key))
+                {
                     dbgs() << "[WARNING] Unhandled Value: " << *key << "\n";
                     continue;
                 }
