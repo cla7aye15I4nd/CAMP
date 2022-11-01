@@ -74,7 +74,7 @@ namespace
         int64_t escapeOptimized;
 
         // Instruction
-        DenseMap<Instruction *, Value *> source;
+        DenseMap<Value *, Value *> source;
         DenseMap<Value *, SmallVector<Instruction *, 16> *> cluster;
 
         SmallSet<Instruction *, 16> escaped;
@@ -345,10 +345,12 @@ namespace
 
             assert(InsertPoint != nullptr);
 
-            IRBuilder<> irBuilder(InsertPoint);
-            auto ptr = irBuilder.CreatePtrToInt(V, int64Type);
-
+            IRBuilder<> irBuilder(&F->getEntryBlock().front());
             auto base_ptr = irBuilder.CreateAlloca(int64Type);
+
+            irBuilder.SetInsertPoint(InsertPoint);
+
+            auto ptr = irBuilder.CreatePtrToInt(V, int64Type);
             auto end = irBuilder.CreateCall(M->getFunction(__GET_CHUNK_RANGE), {ptr, base_ptr});
             auto base = irBuilder.CreateLoad(base_ptr);
 
@@ -443,7 +445,7 @@ namespace
             User *U = nullptr;
             for (auto user : I->users())
             {
-                if (isEscapeInstruction(user))
+                if (isMustEscapeInstruction(user))
                 {
                     if (U != nullptr)
                         return getInsertionPointAfterDef(I);
@@ -452,7 +454,7 @@ namespace
             }
 
             Instruction *P = dyn_cast_or_null<Instruction>(U);
-            return (P != nullptr && !isa<PHINode>(P)) ? P : getInsertionPointAfterDef(I);
+            return P != nullptr ? P : getInsertionPointAfterDef(I);
         }
 
         Value *readRegister(IRBuilder<> &IRB, StringRef Name)
@@ -492,15 +494,6 @@ namespace
         {
             assert(Ptr->getType()->isPointerTy() && "allocateChecker(): Ptr should be pointer type");
 
-            if (source.count(Ptr))
-            {
-                if (isa<GlobalValue>(source[Ptr]))
-                    return false;
-
-                if (isa<AllocaInst>(source[Ptr]))
-                    return false;
-            }
-
             if (GetElementPtrInst *Gep = dyn_cast<GetElementPtrInst>(Ptr))
             {
                 Type *ty = Gep->getPointerOperand()->getType()->getPointerElementType();
@@ -518,6 +511,10 @@ namespace
             if (C && !C->getZExtValue())
                 return false;
 
+            SmallSet<Value *, 16> Visit;
+            if (!isHeapAddress(Ptr, Visit))
+                return false;
+
             // TODO: Built in optimization is not always better
             if (Or != nullptr)
                 // We need save the `Cond` before instrument.
@@ -526,6 +523,31 @@ namespace
                 builtinCheck.push_back(std::make_pair(Ptr, Or));
             else
                 runtimeCheck.push_back(Ptr);
+            return true;
+        }
+
+        bool isHeapAddress(Value *Ptr, SmallSet<Value *, 16> &Visit)
+        {
+            Value *S = findSource(Ptr);
+            if (isa<GlobalValue>(S) ||
+                isa<AllocaInst>(S))
+                return false;
+
+            if (Visit.count(S))
+                return false;
+
+            Visit.insert(S);
+
+            if (auto PN = dyn_cast<PHINode>(S))
+            {
+                for (int i = 0; i < PN->getNumIncomingValues(); ++i)
+                {
+                    Value *V = PN->getIncomingValue(i);
+                    if (isHeapAddress(V, Visit))
+                        return true;
+                }
+                return false;
+            }
             return true;
         }
 
@@ -602,12 +624,11 @@ namespace
             }
             if (BitCastInst *bc = dyn_cast<BitCastInst>(V))
             {
-                Value *S = findSource(bc->getOperand(0));
-                if (CallInst *C = dyn_cast<CallInst>(S))
-                    if (escaped.count(bc) == 0)
-                        return bc; // It is a peephole, optimization
-
-                return source[bc] = S;
+                return source[bc] = findSource(bc->getOperand(0));
+            }
+            if (GEPOperator *gepo = dyn_cast<GEPOperator>(V))
+            {
+                return findSource(gepo->getPointerOperand());
             }
 
             return V;
@@ -621,7 +642,8 @@ namespace
                     {
                         for (auto user : I.users())
                         {
-                            if (isEscapeInstruction(user))
+                            SmallSet<Instruction *, 16> Visit;
+                            if (isEscaped(dyn_cast<Instruction>(user), Visit))
                             {
                                 escaped.insert(&I);
                                 break;
@@ -663,10 +685,25 @@ namespace
                     findSource(&I);
         }
 
-        bool isEscapeInstruction(User *I)
+        bool isMustEscapeInstruction(User *I)
         {
-            return isa<LoadInst>(I) || isa<StoreInst>(I) ||
-                   isa<ReturnInst>(I) || isa<CallBase>(I) || isa<PHINode>(I);
+            return isa<LoadInst>(I) || isa<StoreInst>(I) || isa<ReturnInst>(I) || isa<CallBase>(I);
+        }
+
+        bool isEscaped(Instruction *I, SmallSet<Instruction *, 16> &Visit)
+        {
+            if (Visit.count(I))
+                return false;
+
+            Visit.insert(I);
+            for (auto user : I->users())
+                if (isMustEscapeInstruction(I))
+                    return true;
+            for (auto user : I->users())
+                if (auto PN = dyn_cast<PHINode>(user))
+                    if (isEscaped(PN, Visit))
+                        return true;
+            return false;
         }
 
         void builtinOptimize()
@@ -698,7 +735,7 @@ namespace
                             unsigned int srcSize = DL->getTypeAllocSize(bc->getSrcTy()->getPointerElementType());
                             unsigned int dstSize = DL->getTypeAllocSize(bc->getDestTy()->getPointerElementType());
 
-                            if (srcSize == dstSize)
+                            if (srcSize >= dstSize)
                                 continue;
                             if (!allocateChecker(bc, runtimeCheck, builtinCheck))
                                 bitcastOptimized++;
@@ -721,8 +758,11 @@ namespace
             SmallVector<Instruction *, 16> newRuntimeCheck;
             for (auto &[key, value] : cluster)
             {
-                if (isa<Operator>(key))
+                if (isa<BitCastOperator>(key))
+                {
+                    dbgs() << "[WARNING] Unhandled Value: " << *key << "\n";
                     continue;
+                }
 
                 Instruction *InsertPoint = dependenceOptimize(key, value);
                 int64_t weight = 0, dom = 0;
@@ -731,8 +771,6 @@ namespace
                     if (ins->getParent() == InsertPoint->getParent())
                     {
                         dom += 1;
-                        if (Loop *Lop = LI->getLoopFor(ins->getParent()))
-                            dom += 5;
                     }
                     else
                     {
@@ -871,26 +909,6 @@ namespace
 #if CONFIG_ENABLE_UAF_CHECK
             for (auto SI : storeInsts)
             {
-                if (isa<AllocaInst>(SI->getValueOperand()) || isa<AllocaInst>(SI->getPointerOperand()) || isa<ConstantPointerNull>(SI->getValueOperand()))
-                {
-                    escapeOptimized++;
-                    continue;
-                }
-
-                Instruction *ptr = dyn_cast<Instruction>(SI->getValueOperand());
-                Instruction *loc = dyn_cast<Instruction>(SI->getPointerOperand());
-                if (source.count(ptr) && isa<AllocaInst>(source[ptr]))
-                {
-                    escapeOptimized++;
-                    continue;
-                }
-#if CONFIG_DISABLE_ESCAPE_STACK_LOC
-                if (source.count(loc) && isa<AllocaInst>(source[loc]))
-                {
-                    escapeOptimized++;
-                    continue;
-                }
-#endif
                 escapeTrace++;
                 addEscape(SI);
             }
