@@ -33,6 +33,8 @@ using namespace llvm;
 #define __REPORT_ERROR "__report_error"
 #define __GET_CHUNK_RANGE "__get_chunk_range"
 #define __ESCAPE "__escape"
+#define __STRCPY_CHECK "__strcpy_check"
+#define __STRCAT_CHECK "__strcat_check"
 
 namespace
 {
@@ -203,6 +205,20 @@ namespace
                 __ESCAPE,
                 FunctionType::get(
                     int32Type,
+                    {voidPointerType, voidPointerType},
+                    false));
+
+            M->getOrInsertFunction(
+                __STRCPY_CHECK,
+                FunctionType::get(
+                    voidPointerType,
+                    {voidPointerType, voidPointerType},
+                    false));
+
+            M->getOrInsertFunction(
+                __STRCAT_CHECK,
+                FunctionType::get(
+                    voidPointerType,
                     {voidPointerType, voidPointerType},
                     false));
         }
@@ -643,17 +659,32 @@ namespace
                     {
                         Function *fp = CI->getCalledFunction();
                         if (fp != nullptr)
-                        {   
+                        {
                             StringRef name = fp->getName();
-                            if (name.startswith("llvm.memcpy") || name.startswith("llvm.memmove") || name.startswith("llvm.strncpy"))
+                            if (name.startswith("llvm.memcpy") ||
+                                name.startswith("llvm.memmove") ||
+                                name.startswith("strncpy") ||
+                                name.startswith("strncat"))
                             {
-                                
+
                                 addAuxInstruction(CI, CI->getArgOperand(0), CI->getArgOperand(2));
                                 addAuxInstruction(CI, CI->getArgOperand(1), CI->getArgOperand(2));
                             }
                             else if (name.startswith("llvm.memset"))
                             {
                                 addAuxInstruction(CI, CI->getArgOperand(0), CI->getArgOperand(2));
+                            }
+                            else if (name.startswith("snprintf"))
+                            {
+                                addAuxInstruction(CI, CI->getArgOperand(0), CI->getArgOperand(1));
+                            }
+                            else if (name.startswith("strcpy"))
+                            {
+                                CI->setCalledFunction(M->getFunction(__STRCPY_CHECK));
+                            }
+                            else if (name.startswith("strcat"))
+                            {
+                                CI->setCalledFunction(M->getFunction(__STRCAT_CHECK));
                             }
                         }
                     }
