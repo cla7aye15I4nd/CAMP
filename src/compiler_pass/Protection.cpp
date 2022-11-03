@@ -78,6 +78,7 @@ namespace
         DenseMap<Value *, SmallVector<Instruction *, 16> *> cluster;
 
         SmallSet<Instruction *, 16> escaped;
+        SmallSet<Instruction *, 16> auxiliary;
         SmallVector<Instruction *, 16> runtimeCheck;
         SmallVector<std::pair<Instruction *, Value *>, 16> builtinCheck;
         SmallVector<std::pair<Value *, SmallVector<Instruction *, 16> *>, 16> partialCheck;
@@ -638,15 +639,41 @@ namespace
         {
             for (BasicBlock &BB : *F)
                 for (Instruction &I : BB)
+                    if (CallInst *CI = dyn_cast<CallInst>(&I))
+                    {
+                        Function *fp = CI->getCalledFunction();
+                        if (fp != nullptr)
+                        {   
+                            StringRef name = fp->getName();
+                            if (name.startswith("llvm.memcpy") || name.startswith("llvm.memmove") || name.startswith("llvm.strncpy"))
+                            {
+                                
+                                addAuxInstruction(CI, CI->getArgOperand(0), CI->getArgOperand(2));
+                                addAuxInstruction(CI, CI->getArgOperand(1), CI->getArgOperand(2));
+                            }
+                            else if (name.startswith("llvm.memset"))
+                            {
+                                addAuxInstruction(CI, CI->getArgOperand(0), CI->getArgOperand(2));
+                            }
+                        }
+                    }
+
+            for (BasicBlock &BB : *F)
+                for (Instruction &I : BB)
                     if (isa<GetElementPtrInst>(I) || isa<BitCastInst>(I))
                     {
-                        for (auto user : I.users())
+                        if (auxiliary.count(&I))
+                            escaped.insert(&I);
+                        else
                         {
-                            SmallSet<Instruction *, 16> Visit;
-                            if (isEscaped(dyn_cast<Instruction>(user), Visit))
+                            for (auto user : I.users())
                             {
-                                escaped.insert(&I);
-                                break;
+                                SmallSet<Instruction *, 16> Visit;
+                                if (isEscaped(dyn_cast<Instruction>(user), Visit))
+                                {
+                                    escaped.insert(&I);
+                                    break;
+                                }
                             }
                         }
                     }
@@ -683,6 +710,18 @@ namespace
             for (BasicBlock &BB : *F)
                 for (Instruction &I : BB)
                     findSource(&I);
+        }
+
+        void addAuxInstruction(CallInst *CI, Value *Ptr, Value *Len)
+        {
+            IRBuilder<> irBuilder(CI);
+            auto BC = irBuilder.CreatePointerCast(Ptr, voidPointerType);
+            auto GEP = irBuilder.CreateGEP(BC, irBuilder.CreatePointerCast(Len, int64Type));
+
+            if (auto I = dyn_cast<Instruction>(BC))
+                auxiliary.insert(I);
+            if (auto I = dyn_cast<Instruction>(GEP))
+                auxiliary.insert(I);
         }
 
         bool isMustEscapeInstruction(User *I)
