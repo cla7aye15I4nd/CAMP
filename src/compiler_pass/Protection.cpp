@@ -528,10 +528,6 @@ namespace
             if (C && !C->getZExtValue())
                 return false;
 
-            SmallSet<Value *, 16> Visit;
-            if (!isHeapAddress(Ptr, Visit))
-                return false;
-
             // TODO: Built in optimization is not always better
             if (Or != nullptr)
                 // We need save the `Cond` before instrument.
