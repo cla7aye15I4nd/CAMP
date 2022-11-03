@@ -653,6 +653,7 @@ namespace
 
         void collectInformation()
         {
+#if CONFIG_ENABLE_OOB_CHECK
             for (BasicBlock &BB : *F)
                 for (Instruction &I : BB)
                     if (CallInst *CI = dyn_cast<CallInst>(&I))
@@ -688,7 +689,7 @@ namespace
                             }
                         }
                     }
-
+#endif
             for (BasicBlock &BB : *F)
                 for (Instruction &I : BB)
                     if (isa<GetElementPtrInst>(I) || isa<BitCastInst>(I))
