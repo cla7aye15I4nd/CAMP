@@ -389,7 +389,7 @@ namespace
                 auto offset = irBuilder.CreateSub(Ptr, base);
 
                 Value *Cond = nullptr;
-                int64_t nsize = DL->getTypeAllocSize(I->getType()->getPointerElementType());
+                int64_t nsize = auxiliary.count(I) ? 0 : DL->getTypeAllocSize(I->getType()->getPointerElementType());
                 if (nsize == osize)
                 {
                     Cond = irBuilder.CreateICmpSLT(realEnd, Ptr);
@@ -424,7 +424,7 @@ namespace
             auto gep = dyn_cast_or_null<GetElementPtrInst>(I);
             assert(gep != nullptr && "addGepRuntimeCheck: Require GetElementPtrInst");
 
-            uint64_t typeSize = DL->getTypeAllocSize(gep->getType()->getPointerElementType());
+            uint64_t typeSize = auxiliary.count(I) ? 0 : DL->getTypeAllocSize(gep->getType()->getPointerElementType());
 
             IRBuilder<> irBuilder(fetchBestInsertPoint(gep));
 
@@ -587,7 +587,7 @@ namespace
         {
             assert(Ptr->getType()->isPointerTy() && "getBoundsCheckCond(): Ptr should be pointer type");
 
-            uint32_t NeededSize = DL->getTypeAllocSize(Ptr->getType()->getPointerElementType());
+            uint32_t NeededSize = auxiliary.count(Ptr) ? 0 : DL->getTypeAllocSize(Ptr->getType()->getPointerElementType());
             IRBuilder<TargetFolder> IRB(Ptr->getParent(), BasicBlock::iterator(Ptr), TargetFolder(*DL));
 
             SizeOffset = OSOE->compute(Ptr);
@@ -664,8 +664,8 @@ namespace
                             StringRef name = fp->getName();
                             if (name.startswith("llvm.memcpy") ||
                                 name.startswith("llvm.memmove") ||
-                                name.startswith("strncpy") ||
-                                name.startswith("strncat"))
+                                name == "strncpy" ||
+                                name == "strncat")
                             {
 
                                 addAuxInstruction(CI, CI->getArgOperand(0), CI->getArgOperand(2));
@@ -675,15 +675,15 @@ namespace
                             {
                                 addAuxInstruction(CI, CI->getArgOperand(0), CI->getArgOperand(2));
                             }
-                            else if (name.startswith("snprintf"))
+                            else if (name == "snprintf")
                             {
                                 addAuxInstruction(CI, CI->getArgOperand(0), CI->getArgOperand(1));
                             }
-                            else if (name.startswith("strcpy"))
+                            else if (name == "strcpy")
                             {
                                 CI->setCalledFunction(M->getFunction(__STRCPY_CHECK));
                             }
-                            else if (name.startswith("strcat"))
+                            else if (name == "strcat")
                             {
                                 CI->setCalledFunction(M->getFunction(__STRCAT_CHECK));
                             }
