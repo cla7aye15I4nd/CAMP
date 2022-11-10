@@ -347,7 +347,7 @@ namespace
                 llvm/lib/Transforms/Instrumentation/BoundsChecking.cpp
             */
 
-            IRBuilder<> irBuilder(SplitBlockAndInsertIfThen(Cond, fetchBestInsertPoint(I), true));
+            IRBuilder<> irBuilder(SplitBlockAndInsertIfThen(Cond, fetchBestInsertPoint(I), false));
             irBuilder.CreateCall(M->getFunction(__REPORT_ERROR), {});
         }
 
@@ -406,7 +406,7 @@ namespace
                 assert(isa<Instruction>(offset));
                 dyn_cast<Instruction>(offset)->eraseFromParent();
 
-                irBuilder.SetInsertPoint(SplitBlockAndInsertIfThen(Cond, InsertPoint, true));
+                irBuilder.SetInsertPoint(SplitBlockAndInsertIfThen(Cond, InsertPoint, false));
                 irBuilder.CreateCall(M->getFunction(__REPORT_ERROR), {});
             }
         }
