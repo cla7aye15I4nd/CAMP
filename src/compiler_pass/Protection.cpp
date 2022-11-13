@@ -698,14 +698,11 @@ namespace
                             escaped.insert(&I);
                         else
                         {
-                            for (auto user : I.users())
+                            SmallSet<Instruction *, 16> Visit;
+                            if (isEscaped(&I, Visit))
                             {
-                                SmallSet<Instruction *, 16> Visit;
-                                if (isEscaped(dyn_cast<Instruction>(user), Visit))
-                                {
-                                    escaped.insert(&I);
-                                    break;
-                                }
+                                escaped.insert(&I);
+                                break;
                             }
                         }
                     }
@@ -768,7 +765,7 @@ namespace
 
             Visit.insert(I);
             for (auto user : I->users())
-                if (isMustEscapeInstruction(I))
+                if (isMustEscapeInstruction(user))
                     return true;
             for (auto user : I->users())
                 if (auto PN = dyn_cast<PHINode>(user))
