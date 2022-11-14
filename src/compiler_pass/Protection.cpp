@@ -36,6 +36,7 @@ using namespace llvm;
 #define __STRCPY_CHECK "__strcpy_check"
 #define __STRNCPY_CHECK "__strncpy_check"
 #define __STRCAT_CHECK "__strcat_check"
+#define __STRNCAT_CHECK "__strncat_check"
 
 namespace
 {
@@ -228,6 +229,13 @@ namespace
                 FunctionType::get(
                     voidPointerType,
                     {voidPointerType, voidPointerType},
+                    false));
+
+            M->getOrInsertFunction(
+                __STRNCAT_CHECK,
+                FunctionType::get(
+                    voidPointerType,
+                    {voidPointerType, voidPointerType, int64Type},
                     false));
         }
 
@@ -671,8 +679,7 @@ namespace
                         {
                             StringRef name = fp->getName();
                             if (name.startswith("llvm.memcpy") ||
-                                name.startswith("llvm.memmove") ||
-                                name == "strncat")
+                                name.startswith("llvm.memmove"))
                             {
 
                                 addAuxInstruction(CI, CI->getArgOperand(0), CI->getArgOperand(2));
@@ -693,6 +700,10 @@ namespace
                             else if (name == "strcpy")
                             {
                                 CI->setCalledFunction(M->getFunction(__STRCPY_CHECK));
+                            }
+                            else if (name == "strncat")
+                            {
+                                CI->setCalledFunction(M->getFunction(__STRNCAT_CHECK));
                             }
                             else if (name == "strcat")
                             {
