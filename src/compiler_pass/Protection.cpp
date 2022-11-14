@@ -34,6 +34,7 @@ using namespace llvm;
 #define __GET_CHUNK_RANGE "__get_chunk_range"
 #define __ESCAPE "__escape"
 #define __STRCPY_CHECK "__strcpy_check"
+#define __STRNCPY_CHECK "__strncpy_check"
 #define __STRCAT_CHECK "__strcat_check"
 
 namespace
@@ -213,6 +214,13 @@ namespace
                 FunctionType::get(
                     voidPointerType,
                     {voidPointerType, voidPointerType},
+                    false));
+
+            M->getOrInsertFunction(
+                __STRNCPY_CHECK,
+                FunctionType::get(
+                    voidPointerType,
+                    {voidPointerType, voidPointerType, int64Type},
                     false));
 
             M->getOrInsertFunction(
@@ -664,7 +672,6 @@ namespace
                             StringRef name = fp->getName();
                             if (name.startswith("llvm.memcpy") ||
                                 name.startswith("llvm.memmove") ||
-                                name == "strncpy" ||
                                 name == "strncat")
                             {
 
@@ -678,6 +685,10 @@ namespace
                             else if (name == "snprintf")
                             {
                                 addAuxInstruction(CI, CI->getArgOperand(0), CI->getArgOperand(1));
+                            }
+                            else if (name == "strncpy")
+                            {
+                                CI->setCalledFunction(M->getFunction(__STRNCPY_CHECK));
                             }
                             else if (name == "strcpy")
                             {
