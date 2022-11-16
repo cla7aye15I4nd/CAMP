@@ -33,6 +33,10 @@ using namespace llvm;
 #define __REPORT_ERROR "__report_error"
 #define __GET_CHUNK_RANGE "__get_chunk_range"
 #define __ESCAPE "__escape"
+#define __STRCPY_CHECK "__strcpy_check"
+#define __STRNCPY_CHECK "__strncpy_check"
+#define __STRCAT_CHECK "__strcat_check"
+#define __STRNCAT_CHECK "__strncat_check"
 
 namespace
 {
@@ -78,6 +82,7 @@ namespace
         DenseMap<Value *, SmallVector<Instruction *, 16> *> cluster;
 
         SmallSet<Instruction *, 16> escaped;
+        SmallSet<Instruction *, 16> auxiliary;
         SmallVector<Instruction *, 16> runtimeCheck;
         SmallVector<std::pair<Instruction *, Value *>, 16> builtinCheck;
         SmallVector<std::pair<Value *, SmallVector<Instruction *, 16> *>, 16> partialCheck;
@@ -203,6 +208,34 @@ namespace
                 FunctionType::get(
                     int32Type,
                     {voidPointerType, voidPointerType},
+                    false));
+
+            M->getOrInsertFunction(
+                __STRCPY_CHECK,
+                FunctionType::get(
+                    voidPointerType,
+                    {voidPointerType, voidPointerType},
+                    false));
+
+            M->getOrInsertFunction(
+                __STRNCPY_CHECK,
+                FunctionType::get(
+                    voidPointerType,
+                    {voidPointerType, voidPointerType, int64Type},
+                    false));
+
+            M->getOrInsertFunction(
+                __STRCAT_CHECK,
+                FunctionType::get(
+                    voidPointerType,
+                    {voidPointerType, voidPointerType},
+                    false));
+
+            M->getOrInsertFunction(
+                __STRNCAT_CHECK,
+                FunctionType::get(
+                    voidPointerType,
+                    {voidPointerType, voidPointerType, int64Type},
                     false));
         }
 
@@ -330,7 +363,7 @@ namespace
                 llvm/lib/Transforms/Instrumentation/BoundsChecking.cpp
             */
 
-            IRBuilder<> irBuilder(SplitBlockAndInsertIfThen(Cond, fetchBestInsertPoint(I), true));
+            IRBuilder<> irBuilder(SplitBlockAndInsertIfThen(Cond, fetchBestInsertPoint(I), false));
             irBuilder.CreateCall(M->getFunction(__REPORT_ERROR), {});
         }
 
@@ -372,7 +405,7 @@ namespace
                 auto offset = irBuilder.CreateSub(Ptr, base);
 
                 Value *Cond = nullptr;
-                int64_t nsize = DL->getTypeAllocSize(I->getType()->getPointerElementType());
+                int64_t nsize = auxiliary.count(I) ? 0 : DL->getTypeAllocSize(I->getType()->getPointerElementType());
                 if (nsize == osize)
                 {
                     Cond = irBuilder.CreateICmpSLT(realEnd, Ptr);
@@ -389,7 +422,7 @@ namespace
                 assert(isa<Instruction>(offset));
                 dyn_cast<Instruction>(offset)->eraseFromParent();
 
-                irBuilder.SetInsertPoint(SplitBlockAndInsertIfThen(Cond, InsertPoint, true));
+                irBuilder.SetInsertPoint(SplitBlockAndInsertIfThen(Cond, InsertPoint, false));
                 irBuilder.CreateCall(M->getFunction(__REPORT_ERROR), {});
             }
         }
@@ -407,7 +440,7 @@ namespace
             auto gep = dyn_cast_or_null<GetElementPtrInst>(I);
             assert(gep != nullptr && "addGepRuntimeCheck: Require GetElementPtrInst");
 
-            uint64_t typeSize = DL->getTypeAllocSize(gep->getType()->getPointerElementType());
+            uint64_t typeSize = auxiliary.count(I) ? 0 : DL->getTypeAllocSize(gep->getType()->getPointerElementType());
 
             IRBuilder<> irBuilder(fetchBestInsertPoint(gep));
 
@@ -570,7 +603,7 @@ namespace
         {
             assert(Ptr->getType()->isPointerTy() && "getBoundsCheckCond(): Ptr should be pointer type");
 
-            uint32_t NeededSize = DL->getTypeAllocSize(Ptr->getType()->getPointerElementType());
+            uint32_t NeededSize = auxiliary.count(Ptr) ? 0 : DL->getTypeAllocSize(Ptr->getType()->getPointerElementType());
             IRBuilder<TargetFolder> IRB(Ptr->getParent(), BasicBlock::iterator(Ptr), TargetFolder(*DL));
 
             SizeOffset = OSOE->compute(Ptr);
@@ -636,14 +669,59 @@ namespace
 
         void collectInformation()
         {
+#if CONFIG_ENABLE_OOB_CHECK
+            for (BasicBlock &BB : *F)
+                for (Instruction &I : BB)
+                    if (CallInst *CI = dyn_cast<CallInst>(&I))
+                    {
+                        Function *fp = CI->getCalledFunction();
+                        if (fp != nullptr)
+                        {
+                            StringRef name = fp->getName();
+                            if (name.startswith("llvm.memcpy") ||
+                                name.startswith("llvm.memmove"))
+                            {
+
+                                addAuxInstruction(CI, CI->getArgOperand(0), CI->getArgOperand(2));
+                                addAuxInstruction(CI, CI->getArgOperand(1), CI->getArgOperand(2));
+                            }
+                            else if (name.startswith("llvm.memset"))
+                            {
+                                addAuxInstruction(CI, CI->getArgOperand(0), CI->getArgOperand(2));
+                            }
+                            else if (name == "snprintf")
+                            {
+                                addAuxInstruction(CI, CI->getArgOperand(0), CI->getArgOperand(1));
+                            }
+                            else if (name == "strncpy")
+                            {
+                                CI->setCalledFunction(M->getFunction(__STRNCPY_CHECK));
+                            }
+                            else if (name == "strcpy")
+                            {
+                                CI->setCalledFunction(M->getFunction(__STRCPY_CHECK));
+                            }
+                            else if (name == "strncat")
+                            {
+                                CI->setCalledFunction(M->getFunction(__STRNCAT_CHECK));
+                            }
+                            else if (name == "strcat")
+                            {
+                                CI->setCalledFunction(M->getFunction(__STRCAT_CHECK));
+                            }
+                        }
+                    }
+#endif
             for (BasicBlock &BB : *F)
                 for (Instruction &I : BB)
                     if (isa<GetElementPtrInst>(I) || isa<BitCastInst>(I))
                     {
-                        for (auto user : I.users())
+                        if (auxiliary.count(&I))
+                            escaped.insert(&I);
+                        else
                         {
                             SmallSet<Instruction *, 16> Visit;
-                            if (isEscaped(dyn_cast<Instruction>(user), Visit))
+                            if (isEscaped(&I, Visit))
                             {
                                 escaped.insert(&I);
                                 break;
@@ -685,6 +763,18 @@ namespace
                     findSource(&I);
         }
 
+        void addAuxInstruction(CallInst *CI, Value *Ptr, Value *Len)
+        {
+            IRBuilder<> irBuilder(CI);
+            auto BC = irBuilder.CreatePointerCast(Ptr, voidPointerType);
+            auto GEP = irBuilder.CreateGEP(BC, irBuilder.CreatePointerCast(Len, int64Type));
+
+            if (auto I = dyn_cast<Instruction>(BC))
+                auxiliary.insert(I);
+            if (auto I = dyn_cast<Instruction>(GEP))
+                auxiliary.insert(I);
+        }
+
         bool isMustEscapeInstruction(User *I)
         {
             return isa<LoadInst>(I) || isa<StoreInst>(I) || isa<ReturnInst>(I) || isa<CallBase>(I);
@@ -697,7 +787,7 @@ namespace
 
             Visit.insert(I);
             for (auto user : I->users())
-                if (isMustEscapeInstruction(I))
+                if (isMustEscapeInstruction(user))
                     return true;
             for (auto user : I->users())
                 if (auto PN = dyn_cast<PHINode>(user))
