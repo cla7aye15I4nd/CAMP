@@ -128,6 +128,8 @@ namespace
 
                 source.clear();
                 cluster.clear();
+                escaped.clear();
+                auxiliary.clear();
                 runtimeCheck.clear();
                 builtinCheck.clear();
                 partialCheck.clear();
@@ -586,6 +588,9 @@ namespace
 
         bool isSizedStruct(Type *ty)
         {
+            if (isUnionTy(ty))
+                return false;
+
             if (StructType *sty = dyn_cast<StructType>(ty))
             {
                 assert(!sty->isOpaque());
@@ -714,6 +719,7 @@ namespace
 #endif
             for (BasicBlock &BB : *F)
                 for (Instruction &I : BB)
+                {
                     if (isa<GetElementPtrInst>(I) || isa<BitCastInst>(I))
                     {
                         if (auxiliary.count(&I))
@@ -724,7 +730,6 @@ namespace
                             if (isEscaped(&I, Visit))
                             {
                                 escaped.insert(&I);
-                                break;
                             }
                         }
                     }
@@ -757,7 +762,7 @@ namespace
                             storeInsts.push_back(SI);
                         }
                     }
-
+                }
             for (BasicBlock &BB : *F)
                 for (Instruction &I : BB)
                     findSource(&I);
@@ -817,22 +822,38 @@ namespace
                     {
                         if (bc->getSrcTy()->isPointerTy() && bc->getDestTy()->isPointerTy())
                         {
-                            // TODO: Simply ignoring it may cause some bugs
-                            if (!bc->getSrcTy()->getPointerElementType()->isSized() ||
-                                !bc->getDestTy()->getPointerElementType()->isSized())
+                            Type *srcTy = bc->getSrcTy()->getPointerElementType();
+                            Type *dstTy = bc->getDestTy()->getPointerElementType();
+
+                            if (!srcTy->isSized() ||
+                                !dstTy->isSized())
                                 continue;
 
-                            unsigned int srcSize = DL->getTypeAllocSize(bc->getSrcTy()->getPointerElementType());
-                            unsigned int dstSize = DL->getTypeAllocSize(bc->getDestTy()->getPointerElementType());
-
-                            if (srcSize >= dstSize)
+                            if (isUnionTy(dstTy))
                                 continue;
+
+                            if (!isUnionTy(srcTy))
+                            {
+                                unsigned int srcSize = DL->getTypeAllocSize(srcTy);
+                                unsigned int dstSize = DL->getTypeAllocSize(dstTy);
+
+                                if (srcSize >= dstSize)
+                                    continue;
+                            }
+
                             if (!allocateChecker(bc, runtimeCheck, builtinCheck))
                                 bitcastOptimized++;
                         }
                     }
                 }
             }
+        }
+
+        bool isUnionTy(Type *ty)
+        {
+            if (auto sty = dyn_cast<StructType>(ty))
+                return sty->hasName() && sty->getName().startswith("union.");
+            return false;
         }
 
         void partialBuiltinOptimize()
