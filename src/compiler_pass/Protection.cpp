@@ -782,7 +782,28 @@ namespace
 
         bool isMustEscapeInstruction(User *I)
         {
-            return isa<LoadInst>(I) || isa<StoreInst>(I) || isa<ReturnInst>(I) || isa<CallBase>(I);
+            if (isa<LoadInst>(I) || isa<StoreInst>(I) || isa<ReturnInst>(I))
+                return true;
+
+            if (auto CB = dyn_cast<CallBase>(I))
+            {
+                Function *F = CB->getCalledFunction();
+                if (F != nullptr) {
+                    static SmallVector<StringRef, 16> whitelist = {
+                        "llvm.prefetch.",
+                        "llvm.lifetime.start",
+                        "llvm.lifetime.end",
+                    };
+
+                    for (auto name : whitelist) {
+                        if (F->getName().startswith(name))
+                            return false;
+                    }
+                }
+                return true;
+            }
+
+            return false;
         }
 
         bool isEscaped(Instruction *I, SmallSet<Instruction *, 16> &Visit)
