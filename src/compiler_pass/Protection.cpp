@@ -100,7 +100,9 @@ namespace
                 !isInternalFunction(F.getName()) &&
                 F.getInstructionCount() > 0)
             {
-
+                if (F.getName() == "zend_register_functions" ||
+                    F.getName() == "zend_string_tolower_ex")
+                    return false;
                 this->F = &F;
 
                 M = F.getParent();
