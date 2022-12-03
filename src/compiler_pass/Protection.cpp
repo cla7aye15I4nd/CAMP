@@ -387,7 +387,7 @@ namespace
 
             auto ptr = irBuilder.CreatePtrToInt(V, int64Type);
             auto end = irBuilder.CreateCall(M->getFunction(__GET_CHUNK_RANGE), {ptr, base_ptr});
-            auto base = irBuilder.CreateLoad(base_ptr);
+            auto base = irBuilder.CreateLoad(int64Type, base_ptr);
 
             int64_t osize = -1;
             Value *realEnd = nullptr;
@@ -772,7 +772,7 @@ namespace
         {
             IRBuilder<> irBuilder(CI);
             auto BC = irBuilder.CreatePointerCast(Ptr, voidPointerType);
-            auto GEP = irBuilder.CreateGEP(BC, irBuilder.CreatePointerCast(Len, int64Type));
+            auto GEP = irBuilder.CreateGEP(voidPointerType, BC, irBuilder.CreatePointerCast(Len, int64Type));
 
             if (auto I = dyn_cast<Instruction>(BC))
                 auxiliary.insert(I);
