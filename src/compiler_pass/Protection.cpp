@@ -515,7 +515,7 @@ namespace
             Value *valueIsNull = IRB.CreateICmpNE(value, Constant::getNullValue(int64Type));
 
             Value *cond = IRB.CreateAnd(valueOnStack, valueIsNull);
-#if CONFIG_DISABLE_ESCAPE_STACK_LOC
+#if CONFIG_ENABLE_STACK_ESCAPE_OPTIMIZATION
             Value *locOnStack = IRB.CreateICmpULT(IRB.CreatePtrToInt(SI->getPointerOperand(), int64Type), rsp);
             cond = IRB.CreateAnd(cond, locOnStack);
 #endif
@@ -737,6 +737,13 @@ namespace
                     {
                         if (SI->getValueOperand()->getType()->isPointerTy())
                         {
+#if CONFIG_ENABLE_ESCAPE_TYPE_ONLY
+                            if (!cast<PointerType>(SI->getValueOperand()->getType())->getElementType()->isStructTy())
+                            {
+                                escapeOptimized++;
+                                continue;
+                            }
+#endif
                             if (isa<AllocaInst>(SI->getValueOperand()) || isa<ConstantPointerNull>(SI->getValueOperand()))
                             {
                                 escapeOptimized++;
@@ -749,7 +756,7 @@ namespace
                                 escapeOptimized++;
                                 continue;
                             }
-#if CONFIG_DISABLE_ESCAPE_STACK_LOC
+#if CONFIG_ENABLE_STACK_ESCAPE_OPTIMIZATION
 
                             Instruction *loc = dyn_cast_or_null<Instruction>(SI->getPointerOperand());
                             if (loc && source.count(loc) &&
