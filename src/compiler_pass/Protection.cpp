@@ -50,6 +50,7 @@ namespace
         Function *F;
         const DataLayout *DL;
 
+#if CONFIG_ENABLE_OOB_OPTIMIZATION
         // Analysis
         const TargetLibraryInfo *TLI;
         ScalarEvolution *SE;
@@ -57,7 +58,7 @@ namespace
         DominatorTree *DT;
         PostDominatorTree *PDT;
         LoopInfo *LI;
-
+#endif
         // Type Utils
         Type *voidType;
         Type *int32Type;
@@ -105,6 +106,7 @@ namespace
 
                 M = F.getParent();
                 DL = &M->getDataLayout();
+#if CONFIG_ENABLE_OOB_OPTIMIZATION
                 TLI = &getAnalysis<TargetLibraryInfoWrapperPass>().getTLI(F);
                 SE = &getAnalysis<ScalarEvolutionWrapperPass>().getSE();
                 LI = &getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
@@ -114,7 +116,7 @@ namespace
                 OSOE = new ObjectSizeOffsetEvaluator(*DL, TLI, F.getContext(), EvalOpts);
                 DT = new DominatorTree(F);
                 PDT = new PostDominatorTree(F);
-
+#endif
                 gepOptimized = 0;
                 gepRuntimeCheck = 0;
                 gepPartialCheck = 0;
@@ -273,7 +275,7 @@ namespace
                 }
             }
         }
-
+#if CONFIG_ENABLE_OOB_OPTIMIZATION
         void getAnalysisUsage(AnalysisUsage &AU) const override
         {
             AU.addRequired<DominatorTreeWrapperPass>();
@@ -283,7 +285,7 @@ namespace
             AU.addRequired<LoopInfoWrapperPass>();
             AU.addRequired<ScalarEvolutionWrapperPass>();
         }
-
+#endif
         void report()
         {
             dbgs() << "[REPORT:" << F->getName() << "]\n";
@@ -358,7 +360,7 @@ namespace
                 return nullptr;
             return &*InsertPt;
         }
-
+#if CONFIG_ENABLE_OOB_OPTIMIZATION
         void addBuiltinCheck(Instruction *I, Value *Cond)
         {
             /*
@@ -428,7 +430,7 @@ namespace
                 irBuilder.CreateCall(M->getFunction(__REPORT_ERROR), {});
             }
         }
-
+#endif
         void addGepRuntimeCheck(Instruction *I)
         {
             /*
@@ -528,7 +530,7 @@ namespace
         bool allocateChecker(Instruction *Ptr, SmallVector<Instruction *, 16> &runtimeCheck, SmallVector<std::pair<Instruction *, Value *>, 16> &builtinCheck)
         {
             assert(Ptr->getType()->isPointerTy() && "allocateChecker(): Ptr should be pointer type");
-
+#if CONFIG_ENABLE_OOB_OPTIMIZATION
             if (GetElementPtrInst *Gep = dyn_cast<GetElementPtrInst>(Ptr))
             {
                 Type *ty = Gep->getPointerOperand()->getType()->getPointerElementType();
@@ -558,6 +560,9 @@ namespace
                 builtinCheck.push_back(std::make_pair(Ptr, Or));
             else
                 runtimeCheck.push_back(Ptr);
+#else
+            runtimeCheck.push_back(Ptr);
+#endif
             return true;
         }
 
@@ -603,7 +608,7 @@ namespace
 
             return false;
         }
-
+#if CONFIG_ENABLE_OOB_OPTIMIZATION
         Value *getBoundsCheckCond(Instruction *Ptr, SizeOffsetEvalType &SizeOffset)
         {
             assert(Ptr->getType()->isPointerTy() && "getBoundsCheckCond(): Ptr should be pointer type");
@@ -645,7 +650,7 @@ namespace
 
             return Or;
         }
-
+#endif
         Value *findSource(Value *V)
         {
             if (Instruction *I = dyn_cast<Instruction>(V))
@@ -883,7 +888,7 @@ namespace
                 return sty->hasName() && sty->getName().startswith("union.");
             return false;
         }
-
+#if CONFIG_ENABLE_OOB_OPTIMIZATION
         void partialBuiltinOptimize()
         {
             for (auto &I : runtimeCheck)
@@ -986,7 +991,7 @@ namespace
 
             return InsertPoint;
         }
-
+#endif
         void escapeOptimize()
         {
             SmallVector<StoreInst *, 16> newStoreInsts;
@@ -1023,7 +1028,7 @@ namespace
                     addBitcastRuntimeCheck(I);
                 }
             }
-
+#if CONFIG_ENABLE_OOB_OPTIMIZATION
             for (auto &[V, S] : partialCheck)
             {
                 for (auto &I : *S)
@@ -1044,6 +1049,7 @@ namespace
 
                 addBuiltinCheck(I, cond);
             }
+#endif
 #endif
 #if CONFIG_ENABLE_UAF_CHECK
             for (auto SI : storeInsts)
@@ -1067,3 +1073,9 @@ static void registerPass(const PassManagerBuilder &,
 static RegisterStandardPasses
     RegisterMyPass(PassManagerBuilder::EP_OptimizerLast,
                    registerPass);
+
+#if CONFIG_ENABLE_OOB_OPTIMIZATION == 0
+static RegisterStandardPasses
+    RegisterNoOptPass(PassManagerBuilder::EP_EnabledOnOptLevel0,
+                   registerPass);
+#endif
