@@ -50,14 +50,16 @@ namespace
         Function *F;
         const DataLayout *DL;
 
-#if CONFIG_ENABLE_OOB_OPTIMIZATION
         // Analysis
         const TargetLibraryInfo *TLI;
+#if CONFIG_ENABLE_OOB_OPTIMIZATION
         ScalarEvolution *SE;
         ObjectSizeOffsetEvaluator *OSOE;
         DominatorTree *DT;
         PostDominatorTree *PDT;
         LoopInfo *LI;
+#else
+        ObjectSizeOffsetVisitor *OSV;
 #endif
         // Type Utils
         Type *voidType;
@@ -106,8 +108,9 @@ namespace
 
                 M = F.getParent();
                 DL = &M->getDataLayout();
-#if CONFIG_ENABLE_OOB_OPTIMIZATION
                 TLI = &getAnalysis<TargetLibraryInfoWrapperPass>().getTLI(F);
+
+#if CONFIG_ENABLE_OOB_OPTIMIZATION
                 SE = &getAnalysis<ScalarEvolutionWrapperPass>().getSE();
                 LI = &getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
 
@@ -116,6 +119,10 @@ namespace
                 OSOE = new ObjectSizeOffsetEvaluator(*DL, TLI, F.getContext(), EvalOpts);
                 DT = new DominatorTree(F);
                 PDT = new PostDominatorTree(F);
+#else
+                ObjectSizeOpts EvalOpts;
+                EvalOpts.RoundToAlign = true;
+                OSV = new ObjectSizeOffsetVisitor(*DL, TLI, F.getContext(), EvalOpts);
 #endif
                 gepOptimized = 0;
                 gepRuntimeCheck = 0;
@@ -275,17 +282,19 @@ namespace
                 }
             }
         }
-#if CONFIG_ENABLE_OOB_OPTIMIZATION
+
         void getAnalysisUsage(AnalysisUsage &AU) const override
         {
-            AU.addRequired<DominatorTreeWrapperPass>();
             AU.addRequired<TargetLibraryInfoWrapperPass>();
+#if CONFIG_ENABLE_OOB_OPTIMIZATION
+            AU.addRequired<DominatorTreeWrapperPass>();
             AU.addRequired<PostDominatorTreeWrapperPass>();
             AU.addRequired<AAResultsWrapperPass>();
             AU.addRequired<LoopInfoWrapperPass>();
             AU.addRequired<ScalarEvolutionWrapperPass>();
-        }
 #endif
+        }
+
         void report()
         {
             dbgs() << "[REPORT:" << F->getName() << "]\n";
@@ -360,7 +369,7 @@ namespace
                 return nullptr;
             return &*InsertPt;
         }
-#if CONFIG_ENABLE_OOB_OPTIMIZATION
+
         void addBuiltinCheck(Instruction *I, Value *Cond)
         {
             /*
@@ -371,6 +380,7 @@ namespace
             irBuilder.CreateCall(M->getFunction(__REPORT_ERROR), {});
         }
 
+#if CONFIG_ENABLE_OOB_OPTIMIZATION
         void addPartialCheck(Value *V, SmallVector<Instruction *, 16> *S)
         {
             Instruction *InsertPoint = nullptr;
@@ -560,7 +570,17 @@ namespace
                 builtinCheck.push_back(std::make_pair(Ptr, Or));
             else
                 runtimeCheck.push_back(Ptr);
-#else
+#else            
+            int64_t Offset = 0;
+            uint64_t Size = 0;
+            if (bothKnow(Ptr, Size, Offset)) {
+                uint32_t TypeSize = auxiliary.count(Ptr) ? 0 : DL->getTypeAllocSize(Ptr->getType()->getPointerElementType());
+                if (Offset >= 0 && Size >= uint64_t(Offset) && Size - uint64_t(Offset) >= TypeSize / 8)
+                    return false;
+                
+                builtinCheck.push_back(std::make_pair(Ptr, ConstantInt::getTrue(Ptr->getContext())));
+            }
+
             runtimeCheck.push_back(Ptr);
 #endif
             return true;
@@ -649,6 +669,56 @@ namespace
             }
 
             return Or;
+        }
+#else
+        bool bothKnow(Instruction* I, uint64_t &Size, int64_t& Offset) 
+        {
+            if (auto *Ptr = dyn_cast<GetElementPtrInst>(I)) 
+            {
+                if (auto *Tmp = dyn_cast<GetElementPtrInst>(Ptr->getPointerOperand())) 
+                {
+                    for (auto &index : Tmp->indices()) 
+                    {
+                        ConstantInt *idx = dyn_cast<ConstantInt>(&index);
+                        if (idx == nullptr)
+                            return false;
+                        if (idx->getSExtValue() != 0)
+                            return false;
+                    }
+
+                    if (auto *Gep = dyn_cast<GetElementPtrInst>(Tmp->getPointerOperand())) {
+                        if (auto *Struct = dyn_cast<StructType>(Gep->getSourceElementType()))
+                    {
+                        int64_t nth = 0;
+                        for (auto &index : Gep->indices()) 
+                        {
+                            ConstantInt *idx = dyn_cast<ConstantInt>(&index);
+                            if (idx == nullptr)
+                                return false;
+                            nth = idx->getSExtValue();
+                        }
+
+                        Type* stype = Struct->getElementType(nth);
+                        if (auto *atype = dyn_cast<ArrayType>(stype))
+                        {   
+                            Size = atype->getNumElements() * DL->getTypeAllocSize(atype->getElementType());
+
+                            for (auto &index : Ptr->indices()) 
+                            {
+                                ConstantInt *idx = dyn_cast<ConstantInt>(&index);
+                                if (idx == nullptr)
+                                    return false;
+                                Offset = idx->getSExtValue();
+                            }
+                            
+                            return true;
+                        }
+                    }
+                    }
+                }
+            }
+
+            return false;
         }
 #endif
         Value *findSource(Value *V)
@@ -1039,7 +1109,7 @@ namespace
 
                 addPartialCheck(V, S);
             }
-
+#endif
             for (auto &[I, cond] : builtinCheck)
             {
                 if (isa<GetElementPtrInst>(I))
@@ -1049,7 +1119,6 @@ namespace
 
                 addBuiltinCheck(I, cond);
             }
-#endif
 #endif
 #if CONFIG_ENABLE_UAF_CHECK
             for (auto SI : storeInsts)
