@@ -794,7 +794,11 @@ namespace
 
         bool isMustEscapeInstruction(User *I)
         {
-            if (isa<LoadInst>(I) || isa<StoreInst>(I) || isa<ReturnInst>(I))
+#if CONFIG_ENABLE_READ_CHECK
+            if (isa<LoadInst>(I))
+                return true;
+#endif
+            if (isa<StoreInst>(I) || isa<ReturnInst>(I))
                 return true;
 
             if (auto CB = dyn_cast<CallBase>(I))
