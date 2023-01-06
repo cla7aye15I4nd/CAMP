@@ -513,10 +513,10 @@ namespace
             Value *rsp = readRegister(IRB, "rsp");
 
             Value *value = IRB.CreatePtrToInt(SI->getValueOperand(), int64Type);
-            Value *valueOnStack = IRB.CreateICmpULT(value, rsp);
-            Value *valueIsNull = IRB.CreateICmpNE(value, Constant::getNullValue(int64Type));
+            Value *valueNotOnStack = IRB.CreateICmpULT(value, rsp);
+            Value *valueIsNotNull = IRB.CreateICmpNE(value, Constant::getNullValue(int64Type));
 
-            Value *cond = IRB.CreateAnd(valueOnStack, valueIsNull);
+            Value *cond = IRB.CreateAnd(valueNotOnStack, valueIsNotNull);
 #if CONFIG_ENABLE_STACK_ESCAPE_OPTIMIZATION
             Value *locOnStack = IRB.CreateICmpULT(IRB.CreatePtrToInt(SI->getPointerOperand(), int64Type), rsp);
             cond = IRB.CreateAnd(cond, locOnStack);
