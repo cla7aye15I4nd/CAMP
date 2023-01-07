@@ -518,8 +518,8 @@ namespace
 
             Value *cond = IRB.CreateAnd(valueNotOnStack, valueIsNotNull);
 #if CONFIG_ENABLE_STACK_ESCAPE_OPTIMIZATION
-            Value *locOnStack = IRB.CreateICmpULT(IRB.CreatePtrToInt(SI->getPointerOperand(), int64Type), rsp);
-            cond = IRB.CreateAnd(cond, locOnStack);
+            Value *locNotOnStack = IRB.CreateICmpULT(IRB.CreatePtrToInt(SI->getPointerOperand(), int64Type), rsp);
+            cond = IRB.CreateAnd(cond, locNotOnStack);
 #endif
             IRB.SetInsertPoint(SplitBlockAndInsertIfThen(cond, SI, false));
             IRB.CreateCall(M->getFunction(__ESCAPE),
