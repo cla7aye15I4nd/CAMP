@@ -686,6 +686,38 @@ namespace
             return Or;
         }
 #endif
+
+        bool searchPhi(Value *V, Value* &src, SmallSet<Value*, 16>& Visit) {
+            if (Visit.count(V))
+                return true;
+            Visit.insert(V);
+            if (PHINode *phi = dyn_cast<PHINode>(V)) {
+                for (int i = 0; i < phi->getNumIncomingValues(); ++i) 
+                {
+                    if (!searchPhi(phi->getIncomingValue(i), src, Visit))
+                        return false;
+                }
+                return true;
+            }
+            if (GetElementPtrInst *gep = dyn_cast<GetElementPtrInst>(V))
+            {
+                return searchPhi(gep->getPointerOperand(), src, Visit);
+            }
+            if (BitCastInst *bc = dyn_cast<BitCastInst>(V))
+            {
+                return searchPhi(bc->getOperand(0), src, Visit);
+            }
+            if (GEPOperator *gepo = dyn_cast<GEPOperator>(V))
+            {
+                return searchPhi(gepo->getPointerOperand(), src, Visit);
+            }
+            if (src == nullptr) {
+                src = V;
+                return true;
+            }
+            return src == V;
+        }
+
         Value *findSource(Value *V)
         {
             if (Instruction *I = dyn_cast<Instruction>(V))
@@ -695,7 +727,15 @@ namespace
                     return source[I];
                 }
             }
-
+            if (PHINode *phi = dyn_cast<PHINode>(V))
+            {   
+                Value *src = nullptr;
+                SmallSet<Value*, 16> Visit;
+                if (searchPhi(phi, src, Visit))
+                    return source[phi] = src;
+                else
+                    return source[phi] = phi;
+            }
             if (GetElementPtrInst *gep = dyn_cast<GetElementPtrInst>(V))
             {
                 return source[gep] = findSource(gep->getPointerOperand());
