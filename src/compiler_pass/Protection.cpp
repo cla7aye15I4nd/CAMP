@@ -622,7 +622,9 @@ namespace
                 {
                     if (c->getSExtValue() != 0) 
                         return false;
-                }
+                } 
+                else
+                    return false;
             }
             return true;
         }
