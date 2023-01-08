@@ -558,6 +558,8 @@ namespace
                 Type *ty = Gep->getPointerOperand()->getType()->getPointerElementType();
                 if (isSizedStruct(ty))
                     return false;
+                if (isZeroIndex(Gep))
+                    return false;
             }
 
             if (escaped.count(Ptr) == 0)
@@ -609,6 +611,18 @@ namespace
                         return true;
                 }
                 return false;
+            }
+            return true;
+        }
+
+        bool isZeroIndex(GetElementPtrInst* Gep) {
+            for (auto &index : Gep->indices())
+            {
+                if (auto c = dyn_cast<ConstantInt>(index)) 
+                {
+                    if (c->getSExtValue() != 0) 
+                        return false;
+                }
             }
             return true;
         }
@@ -1003,7 +1017,7 @@ namespace
                     }
                 }
 
-                if (dom > 1 || weight > 2)
+                if (dom > 1 || weight > 4)
                     partialCheck.push_back(std::make_pair(key, value));
                 else
                     newRuntimeCheck.append(*value);
@@ -1040,7 +1054,7 @@ namespace
                         if (i != j)
                         {
                             auto J = (*value)[j];
-                            if (DT->dominates(J, I) || PDT->dominates(I, J))
+                            if (DT->dominates(J, I) || PDT->dominates(I, J) || I->getParent() == J->getParent())
                             {
                                 irBuilder.SetInsertPoint(getInsertionPointAfterDef(J));
                                 auto ptr_J = irBuilder.CreatePtrToInt(J, int64Type);
