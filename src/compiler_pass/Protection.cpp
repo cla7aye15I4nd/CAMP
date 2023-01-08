@@ -388,15 +388,13 @@ namespace
             irBuilder.SetInsertPoint(InsertPoint);
 
             auto ptr = irBuilder.CreatePtrToInt(V, int64Type);
-            auto end = irBuilder.CreateCall(M->getFunction(__GET_CHUNK_RANGE), {ptr, base_ptr});
-            auto base = irBuilder.CreateLoad(int64Type, base_ptr);
-
+            
             Value *rsp = readRegister(irBuilder, "rsp");
             Value *valueNotOnStack = irBuilder.CreateICmpULT(ptr, rsp);
 
             irBuilder.SetInsertPoint(SplitBlockAndInsertIfThen(valueNotOnStack, InsertPoint, false));
             auto if_end = irBuilder.CreateCall(M->getFunction(__GET_CHUNK_RANGE), {ptr, base_ptr});
-            auto if_base = irBuilder.CreateLoad(base_ptr);
+            auto if_base = irBuilder.CreateLoad(int64Type, base_ptr);
 
             irBuilder.SetInsertPoint(InsertPoint);
             PHINode* base = irBuilder.CreatePHI(int64Type, 2);
