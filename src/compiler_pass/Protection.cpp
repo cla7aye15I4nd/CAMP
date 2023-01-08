@@ -553,6 +553,7 @@ namespace
         {
             assert(Ptr->getType()->isPointerTy() && "allocateChecker(): Ptr should be pointer type");
 #if CONFIG_ENABLE_OOB_OPTIMIZATION
+#if CONFIG_ENABLE_TYPE_BASE_OPTIMIZATION
             if (GetElementPtrInst *Gep = dyn_cast<GetElementPtrInst>(Ptr))
             {
                 Type *ty = Gep->getPointerOperand()->getType()->getPointerElementType();
@@ -561,7 +562,7 @@ namespace
                 if (isZeroIndex(Gep))
                     return false;
             }
-
+#endif  // CONFIG_ENABLE_TYPE_BASE_OPTIMIZATION
             if (escaped.count(Ptr) == 0)
                 return false;
 
@@ -576,6 +577,7 @@ namespace
             if (!isHeapAddress(Ptr, Visit))
                 return false;
 
+#if CONFIG_ENABLE_BUILTIN_OPTIMIZATION
             // TODO: Built in optimization is not always better
             if (Or != nullptr)
                 // We need save the `Cond` before instrument.
@@ -584,9 +586,13 @@ namespace
                 builtinCheck.push_back(std::make_pair(Ptr, Or));
             else
                 runtimeCheck.push_back(Ptr);
-#else
+#else   // CONFIG_ENABLE_BUILTIN_OPTIMIZATION
             runtimeCheck.push_back(Ptr);
-#endif
+#endif  // CONFIG_ENABLE_BUILTIN_OPTIMIZATION
+
+#else   // CONFIG_ENABLE_OOB_OPTIMIZATION
+            runtimeCheck.push_back(Ptr);
+#endif  // CONFIG_ENABLE_OOB_OPTIMIZATION
             return true;
         }
 
@@ -1018,11 +1024,14 @@ namespace
                             weight += 5;
                     }
                 }
-
+#if CONFIG_ENABLE_MERGE_OPTIMIZATION
                 if (dom > 1 || weight > 4)
                     partialCheck.push_back(std::make_pair(key, value));
                 else
                     newRuntimeCheck.append(*value);
+#else
+                newRuntimeCheck.append(*value);
+#endif
             }
 
             runtimeCheck.swap(newRuntimeCheck);
@@ -1036,7 +1045,7 @@ namespace
                 InsertPoint = getInsertionPointAfterDef(dyn_cast<Instruction>(key));
             else if (isa<Argument>(key))
                 InsertPoint = &(F->getEntryBlock().front());
-
+#if CONFIG_ENABLE_REMOVE_REDUNDANT_OPTIMIZATION
             IRBuilder<> irBuilder(InsertPoint);
             auto base = irBuilder.CreatePtrToInt(key, int64Type);
 
@@ -1083,7 +1092,7 @@ namespace
             }
             dyn_cast<Instruction>(base)->eraseFromParent();
             value->swap(newvalue);
-
+#endif
             return InsertPoint;
         }
 #endif
