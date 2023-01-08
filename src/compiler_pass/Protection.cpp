@@ -50,6 +50,7 @@ namespace
         Function *F;
         const DataLayout *DL;
 
+#if CONFIG_ENABLE_OOB_OPTIMIZATION
         // Analysis
         const TargetLibraryInfo *TLI;
         ScalarEvolution *SE;
@@ -57,7 +58,7 @@ namespace
         DominatorTree *DT;
         PostDominatorTree *PDT;
         LoopInfo *LI;
-
+#endif
         // Type Utils
         Type *voidType;
         Type *int32Type;
@@ -105,6 +106,7 @@ namespace
 
                 M = F.getParent();
                 DL = &M->getDataLayout();
+#if CONFIG_ENABLE_OOB_OPTIMIZATION
                 TLI = &getAnalysis<TargetLibraryInfoWrapperPass>().getTLI(F);
                 SE = &getAnalysis<ScalarEvolutionWrapperPass>().getSE();
                 LI = &getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
@@ -114,7 +116,7 @@ namespace
                 OSOE = new ObjectSizeOffsetEvaluator(*DL, TLI, F.getContext(), EvalOpts);
                 DT = new DominatorTree(F);
                 PDT = new PostDominatorTree(F);
-
+#endif
                 gepOptimized = 0;
                 gepRuntimeCheck = 0;
                 gepPartialCheck = 0;
@@ -273,7 +275,7 @@ namespace
                 }
             }
         }
-
+#if CONFIG_ENABLE_OOB_OPTIMIZATION
         void getAnalysisUsage(AnalysisUsage &AU) const override
         {
             AU.addRequired<DominatorTreeWrapperPass>();
@@ -283,7 +285,7 @@ namespace
             AU.addRequired<LoopInfoWrapperPass>();
             AU.addRequired<ScalarEvolutionWrapperPass>();
         }
-
+#endif
         void report()
         {
             dbgs() << "[REPORT:" << F->getName() << "]\n";
@@ -358,7 +360,7 @@ namespace
                 return nullptr;
             return &*InsertPt;
         }
-
+#if CONFIG_ENABLE_OOB_OPTIMIZATION
         void addBuiltinCheck(Instruction *I, Value *Cond)
         {
             /*
@@ -388,6 +390,23 @@ namespace
             auto ptr = irBuilder.CreatePtrToInt(V, int64Type);
             auto end = irBuilder.CreateCall(M->getFunction(__GET_CHUNK_RANGE), {ptr, base_ptr});
             auto base = irBuilder.CreateLoad(int64Type, base_ptr);
+
+            Value *rsp = readRegister(irBuilder, "rsp");
+            Value *valueNotOnStack = irBuilder.CreateICmpULT(ptr, rsp);
+
+            irBuilder.SetInsertPoint(SplitBlockAndInsertIfThen(valueNotOnStack, InsertPoint, false));
+            auto if_end = irBuilder.CreateCall(M->getFunction(__GET_CHUNK_RANGE), {ptr, base_ptr});
+            auto if_base = irBuilder.CreateLoad(base_ptr);
+
+            irBuilder.SetInsertPoint(InsertPoint);
+            PHINode* base = irBuilder.CreatePHI(int64Type, 2);
+            base->addIncoming(ConstantInt::get(int64Type, 0), dyn_cast<Instruction>(valueNotOnStack)->getParent());
+            base->addIncoming(if_base, if_base->getParent());
+
+            PHINode* end = irBuilder.CreatePHI(int64Type, 2);
+            end->addIncoming(ConstantInt::get(int64Type, 0x1000000000000), dyn_cast<Instruction>(valueNotOnStack)->getParent());
+            end->addIncoming(if_end, if_end->getParent());
+            
 
             int64_t osize = -1;
             Value *realEnd = nullptr;
@@ -428,7 +447,7 @@ namespace
                 irBuilder.CreateCall(M->getFunction(__REPORT_ERROR), {});
             }
         }
-
+#endif
         void addGepRuntimeCheck(Instruction *I)
         {
             /*
@@ -444,12 +463,19 @@ namespace
 
             uint64_t typeSize = auxiliary.count(I) ? 0 : DL->getTypeAllocSize(gep->getType()->getPointerElementType());
 
-            IRBuilder<> irBuilder(fetchBestInsertPoint(gep));
+            Instruction* InsertPoint = fetchBestInsertPoint(gep);
+            IRBuilder<> irBuilder(InsertPoint);
 
             Value *base = irBuilder.CreatePointerCast(gep->getPointerOperand(), voidPointerType);
             Value *result = irBuilder.CreatePointerCast(gep, voidPointerType);
             Value *size = irBuilder.getInt64(typeSize);
 
+            Value *rsp = readRegister(irBuilder, "rsp");
+
+            Value *value = irBuilder.CreatePtrToInt(gep->getPointerOperand(), int64Type);
+            Value *valueNotOnStack = irBuilder.CreateICmpULT(value, rsp);
+
+            irBuilder.SetInsertPoint(SplitBlockAndInsertIfThen(valueNotOnStack, InsertPoint, false));
             irBuilder.CreateCall(M->getFunction(__GEP_CHECK), {base, result, size});
         }
 
@@ -511,13 +537,13 @@ namespace
             Value *rsp = readRegister(IRB, "rsp");
 
             Value *value = IRB.CreatePtrToInt(SI->getValueOperand(), int64Type);
-            Value *valueOnStack = IRB.CreateICmpULT(value, rsp);
-            Value *valueIsNull = IRB.CreateICmpNE(value, Constant::getNullValue(int64Type));
+            Value *valueNotOnStack = IRB.CreateICmpULT(value, rsp);
+            Value *valueIsNotNull = IRB.CreateICmpNE(value, Constant::getNullValue(int64Type));
 
-            Value *cond = IRB.CreateAnd(valueOnStack, valueIsNull);
+            Value *cond = IRB.CreateAnd(valueNotOnStack, valueIsNotNull);
 #if CONFIG_ENABLE_STACK_ESCAPE_OPTIMIZATION
-            Value *locOnStack = IRB.CreateICmpULT(IRB.CreatePtrToInt(SI->getPointerOperand(), int64Type), rsp);
-            cond = IRB.CreateAnd(cond, locOnStack);
+            Value *locNotOnStack = IRB.CreateICmpULT(IRB.CreatePtrToInt(SI->getPointerOperand(), int64Type), rsp);
+            cond = IRB.CreateAnd(cond, locNotOnStack);
 #endif
             IRB.SetInsertPoint(SplitBlockAndInsertIfThen(cond, SI, false));
             IRB.CreateCall(M->getFunction(__ESCAPE),
@@ -528,11 +554,13 @@ namespace
         bool allocateChecker(Instruction *Ptr, SmallVector<Instruction *, 16> &runtimeCheck, SmallVector<std::pair<Instruction *, Value *>, 16> &builtinCheck)
         {
             assert(Ptr->getType()->isPointerTy() && "allocateChecker(): Ptr should be pointer type");
-
+#if CONFIG_ENABLE_OOB_OPTIMIZATION
             if (GetElementPtrInst *Gep = dyn_cast<GetElementPtrInst>(Ptr))
             {
                 Type *ty = Gep->getPointerOperand()->getType()->getPointerElementType();
                 if (isSizedStruct(ty))
+                    return false;
+                if (isZeroIndex(Gep))
                     return false;
             }
 
@@ -558,6 +586,9 @@ namespace
                 builtinCheck.push_back(std::make_pair(Ptr, Or));
             else
                 runtimeCheck.push_back(Ptr);
+#else
+            runtimeCheck.push_back(Ptr);
+#endif
             return true;
         }
 
@@ -586,10 +617,37 @@ namespace
             return true;
         }
 
+        bool isZeroIndex(GetElementPtrInst* Gep) {
+            for (auto &index : Gep->indices())
+            {
+                if (auto c = dyn_cast<ConstantInt>(index)) 
+                {
+                    if (c->getSExtValue() != 0) 
+                        return false;
+                } 
+                else
+                    return false;
+            }
+            return true;
+        }
+
         bool isSizedStruct(Type *ty)
         {
             if (isUnionTy(ty))
                 return false;
+            
+            // omit virtual table generated by C++
+            if (PointerType* pty = dyn_cast<PointerType>(ty))
+            {
+                if (FunctionType *fty = dyn_cast<FunctionType>(pty->getPointerElementType()))
+                {   
+                    if (fty->getNumParams() >= 1) {
+                        if (PointerType* argTy = dyn_cast<PointerType>(fty->getParamType(0))) {
+                            return argTy->getPointerElementType()->isStructTy();
+                        }
+                    }
+                }
+            }
 
             if (StructType *sty = dyn_cast<StructType>(ty))
             {
@@ -603,7 +661,7 @@ namespace
 
             return false;
         }
-
+#if CONFIG_ENABLE_OOB_OPTIMIZATION
         Value *getBoundsCheckCond(Instruction *Ptr, SizeOffsetEvalType &SizeOffset)
         {
             assert(Ptr->getType()->isPointerTy() && "getBoundsCheckCond(): Ptr should be pointer type");
@@ -645,6 +703,38 @@ namespace
 
             return Or;
         }
+#endif
+
+        bool searchPhi(Value *V, Value* &src, SmallSet<Value*, 16>& Visit) {
+            if (Visit.count(V))
+                return true;
+            Visit.insert(V);
+            if (PHINode *phi = dyn_cast<PHINode>(V)) {
+                for (int i = 0; i < phi->getNumIncomingValues(); ++i) 
+                {
+                    if (!searchPhi(phi->getIncomingValue(i), src, Visit))
+                        return false;
+                }
+                return true;
+            }
+            if (GetElementPtrInst *gep = dyn_cast<GetElementPtrInst>(V))
+            {
+                return searchPhi(gep->getPointerOperand(), src, Visit);
+            }
+            if (BitCastInst *bc = dyn_cast<BitCastInst>(V))
+            {
+                return searchPhi(bc->getOperand(0), src, Visit);
+            }
+            if (GEPOperator *gepo = dyn_cast<GEPOperator>(V))
+            {
+                return searchPhi(gepo->getPointerOperand(), src, Visit);
+            }
+            if (src == nullptr) {
+                src = V;
+                return true;
+            }
+            return src == V;
+        }
 
         Value *findSource(Value *V)
         {
@@ -655,7 +745,15 @@ namespace
                     return source[I];
                 }
             }
-
+            if (PHINode *phi = dyn_cast<PHINode>(V))
+            {   
+                Value *src = nullptr;
+                SmallSet<Value*, 16> Visit;
+                if (searchPhi(phi, src, Visit))
+                    return source[phi] = src;
+                else
+                    return source[phi] = phi;
+            }
             if (GetElementPtrInst *gep = dyn_cast<GetElementPtrInst>(V))
             {
                 return source[gep] = findSource(gep->getPointerOperand());
@@ -789,7 +887,11 @@ namespace
 
         bool isMustEscapeInstruction(User *I)
         {
-            if (isa<LoadInst>(I) || isa<StoreInst>(I) || isa<ReturnInst>(I))
+#if CONFIG_ENABLE_READ_CHECK
+            if (isa<LoadInst>(I))
+                return true;
+#endif
+            if (isa<StoreInst>(I) || isa<ReturnInst>(I))
                 return true;
 
             if (auto CB = dyn_cast<CallBase>(I))
@@ -883,7 +985,7 @@ namespace
                 return sty->hasName() && sty->getName().startswith("union.");
             return false;
         }
-
+#if CONFIG_ENABLE_OOB_OPTIMIZATION
         void partialBuiltinOptimize()
         {
             for (auto &I : runtimeCheck)
@@ -919,7 +1021,7 @@ namespace
                     }
                 }
 
-                if (dom > 1 || weight > 2)
+                if (dom > 1 || weight > 4)
                     partialCheck.push_back(std::make_pair(key, value));
                 else
                     newRuntimeCheck.append(*value);
@@ -956,7 +1058,7 @@ namespace
                         if (i != j)
                         {
                             auto J = (*value)[j];
-                            if (DT->dominates(J, I) || PDT->dominates(I, J))
+                            if (DT->dominates(J, I) || PDT->dominates(I, J) || I->getParent() == J->getParent())
                             {
                                 irBuilder.SetInsertPoint(getInsertionPointAfterDef(J));
                                 auto ptr_J = irBuilder.CreatePtrToInt(J, int64Type);
@@ -986,7 +1088,7 @@ namespace
 
             return InsertPoint;
         }
-
+#endif
         void escapeOptimize()
         {
             SmallVector<StoreInst *, 16> newStoreInsts;
@@ -1023,7 +1125,7 @@ namespace
                     addBitcastRuntimeCheck(I);
                 }
             }
-
+#if CONFIG_ENABLE_OOB_OPTIMIZATION
             for (auto &[V, S] : partialCheck)
             {
                 for (auto &I : *S)
@@ -1044,6 +1146,7 @@ namespace
 
                 addBuiltinCheck(I, cond);
             }
+#endif
 #endif
 #if CONFIG_ENABLE_UAF_CHECK
             for (auto SI : storeInsts)
@@ -1067,3 +1170,9 @@ static void registerPass(const PassManagerBuilder &,
 static RegisterStandardPasses
     RegisterMyPass(PassManagerBuilder::EP_OptimizerLast,
                    registerPass);
+
+#if CONFIG_ENABLE_OOB_OPTIMIZATION == 0
+static RegisterStandardPasses
+    RegisterNoOptPass(PassManagerBuilder::EP_EnabledOnOptLevel0,
+                   registerPass);
+#endif
