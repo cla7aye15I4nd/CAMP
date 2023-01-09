@@ -556,8 +556,7 @@ namespace
 #if CONFIG_ENABLE_TYPE_BASE_OPTIMIZATION
             if (GetElementPtrInst *Gep = dyn_cast<GetElementPtrInst>(Ptr))
             {
-                Type *ty = Gep->getPointerOperand()->getType()->getPointerElementType();
-                if (isSizedStruct(ty))
+                if (isExtractMember(Gep))
                     return false;
                 if (isZeroIndex(Gep))
                     return false;
@@ -664,6 +663,30 @@ namespace
             }
 
             return false;
+        }
+
+        bool isExtractMember(GetElementPtrInst *Gep) 
+        {
+            Type *ty = Gep->getPointerOperand()->getType()->getPointerElementType();
+            if (!isSizedStruct(ty))
+                return false;
+
+            for (auto &index : Gep->indices())
+            {
+                if (auto c = dyn_cast<ConstantInt>(index)) 
+                {
+                    if (c->getSExtValue() != 0)
+                    {
+                        return false;
+                    }
+                } 
+                else 
+                {
+                    return false;
+                }
+                break;
+            }
+            return true;
         }
 #if CONFIG_ENABLE_OOB_OPTIMIZATION
         Value *getBoundsCheckCond(Instruction *Ptr, SizeOffsetEvalType &SizeOffset)
