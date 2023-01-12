@@ -25,6 +25,6 @@ fi
 exec clang++ -g -O1 -Xclang -load -Xclang ${BASE}/build/src/compiler_pass/libProtectionPass.so \
         "$@" \
         ${FLAGS} \
-	-Wl,-rpath,${BASE}/build/src/safe_tcmalloc/tcmalloc \
-	-Qunused-arguments \
+	    -Wl,-rpath,${BASE}/build/src/safe_tcmalloc/tcmalloc \
+	    -Qunused-arguments \
         -Wpointer-arith -Wpointer-to-int-cast \

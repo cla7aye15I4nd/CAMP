@@ -16,5 +16,6 @@ fi
 exec clang -g -O1 -Xclang -load -Xclang ${BASE}/build/src/compiler_pass/libProtectionPass.so \
         "$@" \
         -L${BASE}/build/src/safe_tcmalloc/tcmalloc -ltcmalloc_tcmalloc \
+        -Wl,--rpath=${BASE}/build/src/safe_tcmalloc/tcmalloc
         -Qunused-arguments \
         -Wpointer-arith -Wpointer-to-int-cast
