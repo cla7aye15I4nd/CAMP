@@ -37,6 +37,9 @@ using namespace llvm;
 #define __STRNCPY_CHECK "__strncpy_check"
 #define __STRCAT_CHECK "__strcat_check"
 #define __STRNCAT_CHECK "__strncat_check"
+#define __INLINE_HOOK "__inline_hook"
+#define __PAGE_MAP "__page_map"
+#define __SIZE_MAP "__size_map"
 
 namespace
 {
@@ -140,8 +143,10 @@ namespace
                 bindRuntime();
                 hookInstruction();
 
-                if (F.getName() == "main")
+                if (F.getName() == "main") {
+                    insertHook();
                     insertReport();
+                }
 
                 report();
                 return true;
@@ -241,6 +246,30 @@ namespace
                     voidPointerType,
                     {voidPointerType, voidPointerType, int64Type},
                     false));
+
+            M->getOrInsertFunction(
+                __INLINE_HOOK,
+                FunctionType::get(
+                    voidPointerType,
+                    {int64Type->getPointerTo()->getPointerTo()->getPointerTo(), int32Type->getPointerTo()->getPointerTo()},
+                    false));
+
+            M->getOrInsertGlobal(
+                __SIZE_MAP,
+                int32Type->getPointerTo()
+            );
+
+            M->getOrInsertGlobal(
+                __PAGE_MAP,
+                int64Type->getPointerTo()->getPointerTo()
+            );
+        }
+
+        void insertHook() 
+        {
+            Instruction* InsertPoint = &(F->getEntryBlock().front());
+            IRBuilder<> irBuilder(InsertPoint);
+            irBuilder.CreateCall(M->getFunction(__INLINE_HOOK), {M->getNamedGlobal(__PAGE_MAP), M->getNamedGlobal(__SIZE_MAP)});
         }
 
         void insertReport()
@@ -383,28 +412,101 @@ namespace
             assert(InsertPoint != nullptr);
 
             IRBuilder<> irBuilder(&F->getEntryBlock().front());
-            auto base_ptr = irBuilder.CreateAlloca(int64Type);
-
             irBuilder.SetInsertPoint(InsertPoint);
 
-            auto ptr = irBuilder.CreatePtrToInt(V, int64Type);
-
+            auto v0 = irBuilder.CreateBitCast(V, int64Type);
             Value *rsp = readRegister(irBuilder, "rsp");
-            Value *valueNotOnStack = irBuilder.CreateICmpULT(ptr, rsp);
+            Value *valueNotOnStack = irBuilder.CreateICmpULT(v0, rsp);
 
-            irBuilder.SetInsertPoint(SplitBlockAndInsertIfThen(valueNotOnStack, InsertPoint, false));
-            auto if_end = irBuilder.CreateCall(M->getFunction(__GET_CHUNK_RANGE), {ptr, base_ptr});
-            auto if_base = irBuilder.CreateLoad(base_ptr);
+            Instruction* validInsertPoint = SplitBlockAndInsertIfThen(valueNotOnStack, InsertPoint, false);
+            irBuilder.SetInsertPoint(validInsertPoint);
+
+            auto pagemap = irBuilder.CreateLoad(M->getNamedGlobal(__PAGE_MAP)); // v1
+            auto sizemap = irBuilder.CreateLoad(M->getNamedGlobal(__SIZE_MAP)); // v2
+            
+            auto v4 = irBuilder.CreateLShr(v0, ConstantInt::get(int64Type, 13));
+            auto v5 = irBuilder.CreateAnd(v4, ConstantInt::get(int64Type,32767));
+            auto v6 = irBuilder.CreateLShr(v0, ConstantInt::get(int64Type, 28));
+            auto v7 = irBuilder.CreateGEP(int64Type->getPointerTo(), pagemap, {v6});
+            auto v8 = irBuilder.CreateLoad(v7);
+            auto _v9 = irBuilder.CreateICmpEQ(v8, Constant::getNullValue(int64PointerType));
+
+            auto v10 = SplitBlockAndInsertIfThen(_v9, validInsertPoint, false);
+            dyn_cast<BranchInst>(dyn_cast<Instruction>(_v9)->getParent()->getTerminator())->swapSuccessors();
+
+            irBuilder.SetInsertPoint(v10);
+            auto v11 = irBuilder.CreateGEP(int64Type, v8, {v5});
+            auto v12 = irBuilder.CreateLoad(v11);
+            auto _v13 = irBuilder.CreateICmpEQ(v12, Constant::getNullValue(int64Type));
+
+            auto v14 = SplitBlockAndInsertIfThen(_v13, v10, false);
+            dyn_cast<BranchInst>(dyn_cast<Instruction>(_v13)->getParent()->getTerminator())->swapSuccessors();
+
+            irBuilder.SetInsertPoint(v14);
+            auto v15 = irBuilder.CreateShl(v12, ConstantInt::get(int64Type, 5));
+            auto v16 = irBuilder.CreateAnd(v15, ConstantInt::get(int64Type, -8192));
+            auto v17 = irBuilder.CreateAdd(irBuilder.CreateAnd(v12, ConstantInt::get(int64Type, 255)), ConstantInt::get(int64Type, 1171));
+            auto v18 = irBuilder.CreateGEP(int32Type, sizemap, {v17});
+            auto v19 = irBuilder.CreateLoad(v18);
+            auto v20 = irBuilder.CreateZExt(v19, int64Type);
+            auto v21 = irBuilder.CreateSub(v0, v16);
+            auto v22 = irBuilder.CreateURem(v21, v20);
+            auto v23 = irBuilder.CreateSub(v21, v22);
+            auto v24 = irBuilder.CreateAdd(v23, v16);
+            auto v25 = irBuilder.CreateAdd(v24, v20);
+            // br 45
+
+            irBuilder.SetInsertPoint(validInsertPoint);
+            auto v27 = irBuilder.CreateOr(v5, ConstantInt::get(int64Type, 32768));
+            auto v28 = irBuilder.CreateGEP(int64PointerType, pagemap, {v27});
+            auto v29 = irBuilder.CreateLoad(v28);
+            auto _v30 = irBuilder.CreateICmpEQ(v29, Constant::getNullValue(int64PointerType));
+            auto v26 = dyn_cast<Instruction>(_v30)->getParent();
+
+            auto v31 = SplitBlockAndInsertIfThen(_v30, validInsertPoint, false);
+            dyn_cast<BranchInst>(dyn_cast<Instruction>(_v30)->getParent()->getTerminator())->swapSuccessors();
+
+            irBuilder.SetInsertPoint(v31);
+            auto v32 = irBuilder.CreateGEP(int64Type, v29, {ConstantInt::get(int64Type, 3)});
+            auto v33 = irBuilder.CreateBitCast(v32, int32Type->getPointerTo());
+            auto v34 = irBuilder.CreateLoad(v33);
+            auto v35 = irBuilder.CreateZExt(v34, int64Type);
+            auto v36 = irBuilder.CreateShl(v35, ConstantInt::get(int64Type, 3));
+            auto v37 = irBuilder.CreateGEP(int64Type, v29, {ConstantInt::get(int64Type, 6)});
+            auto v38 = irBuilder.CreateLoad(v37);
+            auto v39 = irBuilder.CreateShl(v38, ConstantInt::get(int64Type, 13));
+            auto v40 = irBuilder.CreateSub(v0, v39);
+            auto v41 = irBuilder.CreateURem(v40, v36);
+            auto v42 = irBuilder.CreateSub(v40, v41);
+            auto v43 = irBuilder.CreateAdd(v42, v39);
+            auto v44 = irBuilder.CreateAdd(v43, v36);
+
+            irBuilder.SetInsertPoint(validInsertPoint);
+            auto _base = irBuilder.CreatePHI(int64Type, 3);
+            _base->addIncoming(v25, v14->getParent());
+            _base->addIncoming(v44, v31->getParent());
+            _base->addIncoming(ConstantInt::get(int64Type, 0x1000000000000LL), v26);
+
+
+            auto _end = irBuilder.CreatePHI(int64Type, 3);
+            _end->addIncoming(v24, v14->getParent());
+            _end->addIncoming(v43, v31->getParent());
+            _end->addIncoming(ConstantInt::get(int64Type, 0), v26);
+
+
+            dyn_cast<BranchInst>(v14->getParent()->getTerminator())->setSuccessor(0, validInsertPoint->getParent());
+            dyn_cast<BranchInst>(dyn_cast<Instruction>(_v13)->getParent()->getTerminator())->getSuccessor(0)->eraseFromParent();
+            dyn_cast<BranchInst>(dyn_cast<Instruction>(_v13)->getParent()->getTerminator())->setSuccessor(0, dyn_cast<Instruction>(v27)->getParent());
 
             irBuilder.SetInsertPoint(InsertPoint);
-            PHINode* base = irBuilder.CreatePHI(int64Type, 2);
-            base->addIncoming(ConstantInt::get(int64Type, 0), dyn_cast<Instruction>(valueNotOnStack)->getParent());
-            base->addIncoming(if_base, if_base->getParent());
+            auto base = irBuilder.CreatePHI(int64Type, 2);
+            base->addIncoming(_base, validInsertPoint->getParent());
+            base->addIncoming(ConstantInt::get(int64Type, 0x1000000000000LL), dyn_cast<Instruction>(valueNotOnStack)->getParent());
 
-            PHINode* end = irBuilder.CreatePHI(int64Type, 2);
-            end->addIncoming(ConstantInt::get(int64Type, 0x1000000000000), dyn_cast<Instruction>(valueNotOnStack)->getParent());
-            end->addIncoming(if_end, if_end->getParent());
-            
+            auto end = irBuilder.CreatePHI(int64Type, 2);
+            end->addIncoming(_end, validInsertPoint->getParent());
+            end->addIncoming(ConstantInt::get(int64Type, 0), dyn_cast<Instruction>(valueNotOnStack)->getParent());
+
 
             int64_t osize = -1;
             Value *realEnd = nullptr;
