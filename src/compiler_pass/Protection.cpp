@@ -1136,7 +1136,7 @@ namespace
                     }
                 }
 #if CONFIG_ENABLE_MERGE_OPTIMIZATION
-                if (dom > 0 || weight > 0)
+                if (dom > 1 || weight > 4)
                     partialCheck.push_back(std::make_pair(key, value));
                 else
                     newRuntimeCheck.append(*value);
