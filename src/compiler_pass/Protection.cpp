@@ -38,8 +38,8 @@ using namespace llvm;
 #define __STRCAT_CHECK "__strcat_check"
 #define __STRNCAT_CHECK "__strncat_check"
 #define __INLINE_HOOK "__inline_hook"
-#define __PAGE_MAP "__page_map"
-#define __SIZE_MAP "__size_map"
+#define __PAGE_MAP "_ZN8tcmalloc17tcmalloc_internal6Static8pagemap_E"
+#define __SIZE_MAP "_ZN8tcmalloc17tcmalloc_internal6Static8sizemap_E"
 
 namespace
 {
@@ -144,7 +144,6 @@ namespace
                 hookInstruction();
 
                 if (F.getName() == "main") {
-                    insertHook();
                     insertReport();
                 }
 
@@ -256,12 +255,12 @@ namespace
 
             M->getOrInsertGlobal(
                 __SIZE_MAP,
-                int32Type->getPointerTo()
+                int32Type
             );
 
             M->getOrInsertGlobal(
                 __PAGE_MAP,
-                int64Type->getPointerTo()->getPointerTo()
+                int64Type->getPointerTo()
             );
         }
 
@@ -421,8 +420,8 @@ namespace
             Instruction* validInsertPoint = SplitBlockAndInsertIfThen(valueNotOnStack, InsertPoint, false);
             irBuilder.SetInsertPoint(validInsertPoint);
 
-            auto pagemap = irBuilder.CreateLoad(M->getNamedGlobal(__PAGE_MAP)); // v1
-            auto sizemap = irBuilder.CreateLoad(M->getNamedGlobal(__SIZE_MAP)); // v2
+            auto pagemap = M->getNamedGlobal(__PAGE_MAP); // v1
+            auto sizemap = M->getNamedGlobal(__SIZE_MAP); // v2
             
             auto v4 = irBuilder.CreateLShr(v0, ConstantInt::get(int64Type, 13));
             auto v5 = irBuilder.CreateAnd(v4, ConstantInt::get(int64Type,32767));
@@ -1137,7 +1136,7 @@ namespace
                     }
                 }
 #if CONFIG_ENABLE_MERGE_OPTIMIZATION
-                if (dom > 1 || weight > 4)
+                if (dom > 0 || weight > 0)
                     partialCheck.push_back(std::make_pair(key, value));
                 else
                     newRuntimeCheck.append(*value);

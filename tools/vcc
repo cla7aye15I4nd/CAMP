@@ -5,7 +5,7 @@ import subprocess
 import sys
 
 def keep_slience(argv):
-  p = subprocess.Popen(['clang'] + argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+  p = subprocess.Popen(['clang++'] + argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
   stdout, _ = p.communicate()
   print(stdout.decode(), end='')
   return p.returncode
@@ -13,19 +13,16 @@ def keep_slience(argv):
 def violet(argv):
   base = os.path.join(os.path.dirname(os.path.realpath(__file__)), '..')
   prefix = ['-g', '-O1', 
-          '-Xclang', '-load', 
-          '-Xclang', f'{base}/build/src/compiler_pass/libProtectionPass.so',
-          f'-Wl,--rpath={base}/build/src/safe_tcmalloc/tcmalloc',
-          f'-L{base}/build/src/safe_tcmalloc/tcmalloc', 
-          '-ltcmalloc_tcmalloc',
-          '-Qunused-arguments',
-          '-Wpointer-arith', 
-          '-Wpointer-to-int-cast']
+            '-Xclang', '-load', 
+            '-Xclang', f'{base}/build/src/compiler_pass/libProtectionPass.so']
   
-  if '-c' not in argv:
-    argv = [f'{base}/tools/tcmalloc_global.c'] + argv
-
-  p = subprocess.Popen(['clang'] + prefix + argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+  suffix = ['-ltcmalloc',
+            f'-L{base}/build/src/safe_tcmalloc/tcmalloc/static',
+            '-Qunused-arguments',
+            '-Wpointer-arith', 
+            '-Wpointer-to-int-cast']
+  
+  p = subprocess.Popen(['clang++'] + prefix + argv + suffix, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
   stdout, _ = p.communicate()
   print(stdout.decode(), end='')
   return p.returncode

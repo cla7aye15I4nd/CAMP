@@ -1,30 +1,46 @@
-#!/bin/bash
+#!/usr/bin/env python
 
-set -e
+import os
+import subprocess
+import sys
 
-BASE="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )/../"
+def keep_slience(argv):
+  p = subprocess.Popen(['clang++'] + argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+  stdout, _ = p.communicate()
+  print(stdout.decode(), end='')
+  return p.returncode
 
-if [ $# -eq 0 ]
-  then
-    echo "USAGE: $0 [options] file..."
-    exit 0
-fi
+def violet(argv):
+  base = os.path.join(os.path.dirname(os.path.realpath(__file__)), '..')
+  prefix = ['-g', '-O1', 
+            '-Xclang', '-load', 
+            '-Xclang', f'{base}/build/src/compiler_pass/libProtectionPass.so']
+  
+  suffix = ['-ltcmalloc',
+            f'-L{base}/build/src/safe_tcmalloc/tcmalloc/static',
+            '-Qunused-arguments',
+            '-Wpointer-arith', 
+            '-Wpointer-to-int-cast']
+  
+  p = subprocess.Popen(['clang++'] + prefix + argv + suffix, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+  stdout, _ = p.communicate()
+  print(stdout.decode(), end='')
+  return p.returncode
 
-source ${BASE}/src/safe_tcmalloc/.config
+def main():
+  argv = sys.argv[1:]
 
-if [ "$ENABLE_GPROF" = "y" ] 
-    then
-	FLAGS="${BASE}/build/src/safe_tcmalloc/tcmalloc/static/libtcmalloc.a -g -pg -pthread"
-    else 
-	FLAGS="-L${BASE}/build/src/safe_tcmalloc/tcmalloc -ltcmalloc_tcmalloc"
-fi
+  exts = ['.c', '.cc', '.cpp', '.cxx', '.C']
+  srcs = [a for a in argv if os.path.splitext(a)[1] in exts]
 
-# The optimization level must be greater than -O0,
-# otherwise some analysis methods cannot be enabled.
-# But over-optimization (O2 or higher) can lead to changes in semantics.
-exec clang++ -g -O1 -Xclang -load -Xclang ${BASE}/build/src/compiler_pass/libProtectionPass.so \
-        "$@" \
-        ${FLAGS} \
-	    -Wl,-rpath,${BASE}/build/src/safe_tcmalloc/tcmalloc \
-	    -Qunused-arguments \
-        -Wpointer-arith -Wpointer-to-int-cast \
+  if any(a in argv for a in ['-E', '-M', '-MM']):
+    return keep_slience(argv)
+
+  elif "-o" not in argv and not srcs:
+    return keep_slience(argv)
+
+  else:
+    return violet(argv)
+
+if __name__ == '__main__':
+	sys.exit(main())
