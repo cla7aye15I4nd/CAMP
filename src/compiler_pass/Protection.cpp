@@ -67,11 +67,13 @@ namespace
         Type *int64PointerType;
 
         // Statistic
-        int64_t gepOptimized;
+        int64_t gepIgnoreOptimized;
+        int64_t gepDepOptimized;
         int64_t gepPartialCheck;
         int64_t gepRuntimeCheck;
         int64_t gepBuiltinCheck;
-        int64_t bitcastOptimized;
+        int64_t bitcastIgnoreOptimized;
+        int64_t bitcastDepOptimized;
         int64_t bitcastPartialCheck;
         int64_t bitcastBuiltinCheck;
         int64_t bitcastRuntimeCheck;
@@ -117,11 +119,13 @@ namespace
                 DT = new DominatorTree(F);
                 PDT = new PostDominatorTree(F);
 #endif
-                gepOptimized = 0;
+                gepIgnoreOptimized = 0;
+                gepDepOptimized = 0;
                 gepRuntimeCheck = 0;
                 gepPartialCheck = 0;
                 gepBuiltinCheck = 0;
-                bitcastOptimized = 0;
+                bitcastIgnoreOptimized = 0;
+                bitcastDepOptimized = 0;
                 bitcastBuiltinCheck = 0;
                 bitcastPartialCheck = 0;
                 bitcastRuntimeCheck = 0;
@@ -292,7 +296,8 @@ namespace
             if (bitcastRuntimeCheck > 0 || bitcastPartialCheck > 0 || bitcastBuiltinCheck > 0)
             {
                 dbgs() << "    [BitCast]\n";
-                dbgs() << "        Optimized: " << bitcastOptimized << " \n";
+                dbgs() << "        Ignore Optimized: " << bitcastIgnoreOptimized << " \n";
+                dbgs() << "        Dep Optimized: " << bitcastDepOptimized << " \n";
                 dbgs() << "        Runtime Check: " << bitcastRuntimeCheck << " \n";
                 dbgs() << "        Partial Check: " << bitcastPartialCheck << " \n";
                 dbgs() << "        Builtin Check: " << bitcastBuiltinCheck << " \n";
@@ -301,7 +306,8 @@ namespace
             {
 
                 dbgs() << "    [GepElementPtr] \n";
-                dbgs() << "        Optimized: " << gepOptimized << " \n";
+                dbgs() << "        Ignore Optimized: " << gepIgnoreOptimized << " \n";
+                dbgs() << "        Dep Optimized: " << gepDepOptimized << " \n";
                 dbgs() << "        Runtime Check: " << gepRuntimeCheck << " \n";
                 dbgs() << "        Partial Check: " << gepPartialCheck << " \n";
                 dbgs() << "        Builtin Check: " << gepBuiltinCheck << " \n";
@@ -958,7 +964,7 @@ namespace
                         {
                             if (!allocateChecker(gep, runtimeCheck, builtinCheck))
                             {
-                                gepOptimized++;
+                                gepIgnoreOptimized++;
                             }
                         }
                     }
@@ -986,7 +992,7 @@ namespace
                             }
 
                             if (!allocateChecker(bc, runtimeCheck, builtinCheck))
-                                bitcastOptimized++;
+                                bitcastIgnoreOptimized++;
                         }
                     }
                 }
@@ -1055,55 +1061,80 @@ namespace
                 InsertPoint = getInsertionPointAfterDef(dyn_cast<Instruction>(key));
             else if (isa<Argument>(key))
                 InsertPoint = &(F->getEntryBlock().front());
+
 #if CONFIG_ENABLE_REMOVE_REDUNDANT_OPTIMIZATION
-            IRBuilder<> irBuilder(InsertPoint);
-            auto base = irBuilder.CreatePtrToInt(key, int64Type);
+            IRBuilder<TargetFolder> irBuilder(InsertPoint->getParent(), BasicBlock::iterator(InsertPoint->getIterator()), TargetFolder(*DL));
 
             SmallVector<Instruction *, 16> newvalue;
             for (size_t i = 0; i < value->size(); ++i)
             {
                 bool optimized = false;
-                auto I = (*value)[i];
-
-                irBuilder.SetInsertPoint(getInsertionPointAfterDef(I));
-                auto ptr_I = irBuilder.CreatePtrToInt(I, int64Type);
-                auto offset_I = irBuilder.CreateSub(ptr_I, base);
-                if (!SE->getSignedRangeMin(SE->getSCEV(offset_I)).isNegative())
-                {
-                    for (size_t j = 0; j < value->size() && !optimized; ++j)
+                if (auto I = dyn_cast<GetElementPtrInst>((*value)[i])) {
+                    for (size_t j = 0; j < value->size(); ++j)
                     {
                         if (i != j)
                         {
-                            auto J = (*value)[j];
-                            if (DT->dominates(J, I) || PDT->dominates(I, J) || I->getParent() == J->getParent())
-                            {
-                                irBuilder.SetInsertPoint(getInsertionPointAfterDef(J));
-                                auto ptr_J = irBuilder.CreatePtrToInt(J, int64Type);
-                                auto offset_J = irBuilder.CreateSub(ptr_J, ptr_I);
-                                if (!SE->getSignedRangeMin(SE->getSCEV(offset_J)).isNegative())
-                                    optimized = true;
-                                dyn_cast<Instruction>(ptr_J)->eraseFromParent();
-                                dyn_cast<Instruction>(offset_J)->eraseFromParent();
+                            if (auto J = dyn_cast<GetElementPtrInst>((*value)[j])) {
+                                if (DT->dominates(J, I) || PDT->dominates(I, J))
+                                {
+                                    if (I->getPointerOperand() == J->getPointerOperand()) 
+                                    {
+                                        if (I->getNumIndices() == 1 && J->getNumIndices() == 1)
+                                        {
+                                            Value *Iindex = GetSingleIndex(I);
+                                            Value *Jindex = GetSingleIndex(J);
+                                            irBuilder.SetInsertPoint(J);
+                                            auto Offset = irBuilder.CreateSub(Jindex, Iindex);
+                                            auto OffsetRange = SE->getUnsignedRange(SE->getSCEV(Offset));
+                                            if (!OffsetRange.getUnsignedMax().isNegative())
+                                            {
+                                                optimized = true;
+                                                break;
+                                            }
+                                        } 
+                                        if (isSizedStruct(I->getType()->getPointerElementType())) {
+                                            Value *Iindex = GetSingleIndex(I);
+                                            Value *Jindex = GetSingleIndex(J);
+                                            irBuilder.SetInsertPoint(J);
+                                            auto Offset = irBuilder.CreateSub(Jindex, Iindex);
+                                            auto OffsetRange = SE->getUnsignedRange(SE->getSCEV(Offset));
+                                            if (!OffsetRange.getUnsignedMin().isNegative())
+                                            {
+                                                optimized = true;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
+                    if (optimized)
+                        gepDepOptimized++;
+                    else {
+                        newvalue.push_back(I);
+                    }
                 }
-                dyn_cast<Instruction>(ptr_I)->eraseFromParent();
-                dyn_cast<Instruction>(offset_I)->eraseFromParent();
-                if (optimized)
-                {
-                    if (isa<GetElementPtrInst>(I))
-                        gepOptimized++;
-                    if (isa<BitCastInst>(I))
-                        bitcastOptimized++;
-                }
-                else
-                    newvalue.push_back(I);
             }
-            dyn_cast<Instruction>(base)->eraseFromParent();
             value->swap(newvalue);
 #endif
             return InsertPoint;
+        }
+
+        Value* GetSingleIndex(GetElementPtrInst *gep)
+        {
+            for (auto &Ind : gep->indices()) {
+                auto V = Ind.get();
+                while (true) {
+                    if (auto I = dyn_cast<Instruction>(V)) {
+                        if (I->getNumOperands() == 1)
+                            V = I->getOperand(0);
+                        else break;
+                    } else break;
+                }
+                return V;
+            }
+            return nullptr;
         }
 #endif
         void escapeOptimize()
