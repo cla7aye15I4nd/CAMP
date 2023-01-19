@@ -566,6 +566,8 @@ namespace
                     return false;
                 if (isZeroIndex(Gep))
                     return false;
+                if (isVirtualTable(Gep))
+                    return false;
             }
 #endif  // CONFIG_ENABLE_TYPE_BASE_OPTIMIZATION
             if (escaped.count(Ptr) == 0)
@@ -681,6 +683,24 @@ namespace
             }
             return true;
         }
+
+        bool isVirtualTable(GetElementPtrInst *Gep) 
+        {
+            if (auto pty = dyn_cast<PointerType>(Gep->getPointerOperand()->getType()->getPointerElementType())) {
+                if (auto fty = dyn_cast<FunctionType>(pty->getPointerElementType())) {
+                    if (fty->getNumParams() >= 1) {
+                        if (auto fpty = dyn_cast<PointerType>(fty->getParamType(0))) {
+                            if (fpty->getPointerElementType()->isStructTy()) {
+                                dbgs() << "isVirtualTable: " << *Gep << "\n";
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+
 #if CONFIG_ENABLE_OOB_OPTIMIZATION
         Value *getBoundsCheckCond(Instruction *Ptr, SizeOffsetEvalType &SizeOffset)
         {
