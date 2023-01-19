@@ -84,6 +84,7 @@ namespace
 
         SmallSet<Instruction *, 16> escaped;
         SmallSet<Instruction *, 16> auxiliary;
+        SmallSet<Instruction *, 16> arrayCheck;
         SmallVector<Instruction *, 16> runtimeCheck;
         SmallVector<std::pair<Instruction *, Value *>, 16> builtinCheck;
         SmallVector<std::pair<Value *, SmallVector<Instruction *, 16> *>, 16> partialCheck;
@@ -132,6 +133,7 @@ namespace
                 cluster.clear();
                 escaped.clear();
                 auxiliary.clear();
+                arrayCheck.clear();
                 runtimeCheck.clear();
                 builtinCheck.clear();
                 partialCheck.clear();
@@ -477,6 +479,53 @@ namespace
             irBuilder.CreateCall(M->getFunction(__GEP_CHECK), {base, result, size});
         }
 
+        bool addGepArrayCheck(Instruction *I)
+        {
+            /*
+                Before: gep st 0, idx
+                After: gep st 0, idx
+                    assert((unsigned)idx < array size)
+            */
+            auto gep = cast<GetElementPtrInst>(I);
+            Type *ty = gep->getPointerOperand()->getType()->getPointerElementType();
+            if (StructType *st = dyn_cast<StructType>(ty))
+            {
+                unsigned inc_num = gep->getNumIndices();
+                Type *cur_type = st;
+                // first indice is 0
+                for (unsigned i=2; i<inc_num+1; i++)
+                {
+                    Value *operand = gep->getOperand(i);
+                    if (auto *C = dyn_cast<ConstantInt>(operand))
+                    {
+                        if (cur_type->isStructTy()) {
+                            cur_type = cast<StructType>(cur_type)->getElementType(C->getSExtValue());
+                        } else if (cur_type->isArrayTy()) {
+                            cur_type = cast<ArrayType>(cur_type)->getElementType();
+                        } else {
+                            // we do not handle union for now.
+                            return false;
+                        }
+                    } else if (cur_type->isArrayTy()) {
+                        // insert check for array size and its value
+                        Instruction *InsertPoint = getInsertionPointAfterDef(gep);
+                        IRBuilder<> irBuilder(InsertPoint);
+                        unsigned array_size = cast<ArrayType>(cur_type)->getNumElements();
+                        outs() << "Type " << *cur_type << " size " << array_size << "\n";
+                        Value *check_point = irBuilder.CreateICmpUGE(operand, ConstantInt::get(int32Type, array_size));
+                        irBuilder.SetInsertPoint(SplitBlockAndInsertIfThen(check_point, InsertPoint, false));
+                        irBuilder.CreateCall(M->getFunction(__REPORT_ERROR), {});
+
+                        // update the type information
+                        cur_type = cast<ArrayType>(cur_type)->getElementType();
+                    }
+                    
+                }
+                return true;
+           }
+           return false;
+        }
+
         void addBitcastRuntimeCheck(Instruction *I)
         {
             /*
@@ -556,11 +605,36 @@ namespace
 #if CONFIG_ENABLE_TYPE_BASE_OPTIMIZATION
             if (GetElementPtrInst *Gep = dyn_cast<GetElementPtrInst>(Ptr))
             {
-                if (isExtractMember(Gep))
-                    return false;
-                if (isZeroIndex(Gep))
-                    return false;
+                Type *ty = Gep->getPointerOperand()->getType()->getPointerElementType();
+                int obj_size = DL->getTypeStoreSize(ty) < DL->getTypeAllocSize(ty)? DL->getTypeAllocSize(ty) : DL->getTypeStoreSize(ty);
+                APInt offset(DL->getIndexTypeSizeInBits(Gep->getType()), 0);
+                if (Gep->accumulateConstantOffset(*DL, offset))
+                {
+                    // got constant offset, check with the structure size
+                    int offset_val = offset.getSExtValue();
+                    if (offset_val < 0)
+                    {
+                        // this could be a under overflow, throw a warning.
+                        errs() << "Possible under overflow coding style: " << *Gep << "\n";
+                    }
+                    if (offset_val < obj_size) {
+                        // apply the type-based optimization
+                        return false;
+                    }
+                    // possible constant overflow will be handled by fortified source
+                }
+                    else 
+                {
+                    // dynamic index is handled in instrumentation
+                    outs() << "insert " << *Ptr << " to array check\n";
+                    if (Gep->getNumIndices() > 0 && isa<ConstantInt>(Gep->getOperand(1))) {
+                        ConstantInt *C = cast<ConstantInt>(Gep->getOperand(1));
+                        if (C->getSExtValue() == 0)
+                            arrayCheck.insert(Ptr);
+                    }
+                }
             }
+
 #endif  // CONFIG_ENABLE_TYPE_BASE_OPTIMIZATION
             if (escaped.count(Ptr) == 0)
                 return false;
@@ -1134,6 +1208,11 @@ namespace
                 if (isa<GetElementPtrInst>(I))
                 {
                     gepRuntimeCheck++;
+                    if (arrayCheck.count(I)) {
+                        if (addGepArrayCheck(I))
+                            continue;
+                    }
+                    outs() << "arrary check size  " << arrayCheck.size() << "\n";
                     addGepRuntimeCheck(I);
                 }
                 else
