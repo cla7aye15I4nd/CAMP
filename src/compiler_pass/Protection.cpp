@@ -511,7 +511,6 @@ namespace
                         Instruction *InsertPoint = getInsertionPointAfterDef(gep);
                         IRBuilder<> irBuilder(InsertPoint);
                         unsigned array_size = cast<ArrayType>(cur_type)->getNumElements();
-                        outs() << "Type " << *cur_type << " size " << array_size << "\n";
                         Value *check_point = irBuilder.CreateICmpUGE(operand, ConstantInt::get(int32Type, array_size));
                         irBuilder.SetInsertPoint(SplitBlockAndInsertIfThen(check_point, InsertPoint, false));
                         irBuilder.CreateCall(M->getFunction(__REPORT_ERROR), {});
@@ -626,7 +625,6 @@ namespace
                     else 
                 {
                     // dynamic index is handled in instrumentation
-                    outs() << "insert " << *Ptr << " to array check\n";
                     if (Gep->getNumIndices() > 0 && isa<ConstantInt>(Gep->getOperand(1))) {
                         ConstantInt *C = cast<ConstantInt>(Gep->getOperand(1));
                         if (C->getSExtValue() == 0)
@@ -1212,7 +1210,6 @@ namespace
                         if (addGepArrayCheck(I))
                             continue;
                     }
-                    outs() << "arrary check size  " << arrayCheck.size() << "\n";
                     addGepRuntimeCheck(I);
                 }
                 else
