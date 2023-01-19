@@ -1095,6 +1095,8 @@ namespace
                 int64_t weight = 0, dom = 0;
                 for (auto ins : *value)
                 {
+                    if (arrayCheck.count(ins))
+                        continue;
                     if (ins->getParent() == InsertPoint->getParent())
                     {
                         dom += 1;
@@ -1205,11 +1207,11 @@ namespace
             {
                 if (isa<GetElementPtrInst>(I))
                 {
-                    gepRuntimeCheck++;
                     if (arrayCheck.count(I)) {
                         if (addGepArrayCheck(I))
                             continue;
                     }
+                    gepRuntimeCheck++;
                     addGepRuntimeCheck(I);
                 }
                 else
