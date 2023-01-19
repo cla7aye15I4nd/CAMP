@@ -1079,26 +1079,26 @@ namespace
                                 {
                                     if (I->getPointerOperand() == J->getPointerOperand()) 
                                     {
+                                        if (isSizedStruct(I->getType()->getPointerElementType())) {
+                                            Value *Iindex = GetSingleIndex(I);
+                                            Value *Jindex = GetSingleIndex(J);
+                                            irBuilder.SetInsertPoint(J);
+                                            auto Offset = irBuilder.CreateSub(Jindex, Iindex);
+                                            auto OffsetRange = SE->getSignedRange(SE->getSCEV(Offset));
+                                            if (!OffsetRange.getSignedMin().isNegative())
+                                            {
+                                                optimized = true;
+                                                break;
+                                            }
+                                        }
                                         if (I->getNumIndices() == 1 && J->getNumIndices() == 1)
                                         {
                                             Value *Iindex = GetSingleIndex(I);
                                             Value *Jindex = GetSingleIndex(J);
                                             irBuilder.SetInsertPoint(J);
                                             auto Offset = irBuilder.CreateSub(Jindex, Iindex);
-                                            auto OffsetRange = SE->getUnsignedRange(SE->getSCEV(Offset));
-                                            if (!OffsetRange.getUnsignedMax().isNegative())
-                                            {
-                                                optimized = true;
-                                                break;
-                                            }
-                                        } 
-                                        if (isSizedStruct(I->getType()->getPointerElementType())) {
-                                            Value *Iindex = GetSingleIndex(I);
-                                            Value *Jindex = GetSingleIndex(J);
-                                            irBuilder.SetInsertPoint(J);
-                                            auto Offset = irBuilder.CreateSub(Jindex, Iindex);
-                                            auto OffsetRange = SE->getUnsignedRange(SE->getSCEV(Offset));
-                                            if (!OffsetRange.getUnsignedMin().isNegative())
+                                            auto OffsetRange = SE->getSignedRange(SE->getSCEV(Offset));
+                                            if (!OffsetRange.getSignedMin().isNegative())
                                             {
                                                 optimized = true;
                                                 break;
