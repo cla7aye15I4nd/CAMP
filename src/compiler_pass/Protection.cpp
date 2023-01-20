@@ -395,22 +395,33 @@ namespace
 
             auto ptr = irBuilder.CreatePtrToInt(V, int64Type);
 
-            Value *rsp = readRegister(irBuilder, "rsp");
-            Value *valueNotOnStack = irBuilder.CreateICmpULT(ptr, rsp);
+            Value* base;
+            Value* end;
 
-            irBuilder.SetInsertPoint(SplitBlockAndInsertIfThen(valueNotOnStack, InsertPoint, false));
-            auto if_end = irBuilder.CreateCall(M->getFunction(__GET_CHUNK_RANGE), {ptr, base_ptr});
-            auto if_base = irBuilder.CreateLoad(base_ptr);
+            if (MaybeStack(V)) {
+                Value *rsp = readRegister(irBuilder, "rsp");
+                Value *valueNotOnStack = irBuilder.CreateICmpULT(ptr, rsp);
 
-            irBuilder.SetInsertPoint(InsertPoint);
-            PHINode* base = irBuilder.CreatePHI(int64Type, 2);
-            base->addIncoming(ConstantInt::get(int64Type, 0), dyn_cast<Instruction>(valueNotOnStack)->getParent());
-            base->addIncoming(if_base, if_base->getParent());
+                irBuilder.SetInsertPoint(SplitBlockAndInsertIfThen(valueNotOnStack, InsertPoint, false));
+                auto if_end = irBuilder.CreateCall(M->getFunction(__GET_CHUNK_RANGE), {ptr, base_ptr});
+                auto if_base = irBuilder.CreateLoad(base_ptr);
 
-            PHINode* end = irBuilder.CreatePHI(int64Type, 2);
-            end->addIncoming(ConstantInt::get(int64Type, 0x1000000000000), dyn_cast<Instruction>(valueNotOnStack)->getParent());
-            end->addIncoming(if_end, if_end->getParent());
-            
+                irBuilder.SetInsertPoint(InsertPoint);
+                PHINode* base_phi = irBuilder.CreatePHI(int64Type, 2);
+                base_phi->addIncoming(ConstantInt::get(int64Type, 0), dyn_cast<Instruction>(valueNotOnStack)->getParent());
+                base_phi->addIncoming(if_base, if_base->getParent());
+
+                PHINode* end_phi = irBuilder.CreatePHI(int64Type, 2);
+                end_phi->addIncoming(ConstantInt::get(int64Type, 0x1000000000000), dyn_cast<Instruction>(valueNotOnStack)->getParent());
+                end_phi->addIncoming(if_end, if_end->getParent());
+
+                base = base_phi;
+                end = end_phi;
+            } else {
+                end = irBuilder.CreateCall(M->getFunction(__GET_CHUNK_RANGE), {ptr, base_ptr});
+                base = irBuilder.CreateLoad(base_ptr);
+            }
+                
 
             int64_t osize = -1;
             Value *realEnd = nullptr;
@@ -474,13 +485,27 @@ namespace
             Value *result = irBuilder.CreatePointerCast(gep, voidPointerType);
             Value *size = irBuilder.getInt64(typeSize);
 
-            Value *rsp = readRegister(irBuilder, "rsp");
+            if (MaybeStack(source[I])) {
+                Value *rsp = readRegister(irBuilder, "rsp");
 
-            Value *value = irBuilder.CreatePtrToInt(gep->getPointerOperand(), int64Type);
-            Value *valueNotOnStack = irBuilder.CreateICmpULT(value, rsp);
+                Value *value = irBuilder.CreatePtrToInt(gep->getPointerOperand(), int64Type);
+                Value *valueNotOnStack = irBuilder.CreateICmpULT(value, rsp);
 
-            irBuilder.SetInsertPoint(SplitBlockAndInsertIfThen(valueNotOnStack, InsertPoint, false));
+                irBuilder.SetInsertPoint(SplitBlockAndInsertIfThen(valueNotOnStack, InsertPoint, false));
+            }
             irBuilder.CreateCall(M->getFunction(__GEP_CHECK), {base, result, size});
+        }
+
+        bool MaybeStack(Value* V) {
+            if (isa<CallBase>(V))
+                return false;
+            if (isa<LoadInst>(V))
+                return false;
+            if (isa<PHINode>(V))
+                return false;
+            dbgs() << *V << "\n";
+
+            return true;
         }
 
         void addBitcastRuntimeCheck(Instruction *I)
@@ -559,6 +584,13 @@ namespace
         {
             assert(Ptr->getType()->isPointerTy() && "allocateChecker(): Ptr should be pointer type");
 #if CONFIG_ENABLE_OOB_OPTIMIZATION
+            if (escaped.count(Ptr) == 0)
+                return false;
+            
+            SmallSet<Value *, 16> Visit;
+            if (!isHeapAddress(Ptr, Visit))
+                return false;
+
 #if CONFIG_ENABLE_TYPE_BASE_OPTIMIZATION
             if (GetElementPtrInst *Gep = dyn_cast<GetElementPtrInst>(Ptr))
             {
@@ -570,18 +602,12 @@ namespace
                     return false;
             }
 #endif  // CONFIG_ENABLE_TYPE_BASE_OPTIMIZATION
-            if (escaped.count(Ptr) == 0)
-                return false;
 
             SizeOffsetEvalType SizeOffset;
             Value *Or = getBoundsCheckCond(Ptr, SizeOffset);
             ConstantInt *C = dyn_cast_or_null<ConstantInt>(Or);
 
             if (C && !C->getZExtValue())
-                return false;
-
-            SmallSet<Value *, 16> Visit;
-            if (!isHeapAddress(Ptr, Visit))
                 return false;
 
 #if CONFIG_ENABLE_BUILTIN_OPTIMIZATION
@@ -660,10 +686,17 @@ namespace
             return false;
         }
 
+        bool isSizedArray(Type *ty)
+        {
+            if (ArrayType *aty = dyn_cast<ArrayType>(ty))
+                return true;
+            return false;
+        }
+
         bool isExtractMember(GetElementPtrInst *Gep) 
         {
             Type *ty = Gep->getPointerOperand()->getType()->getPointerElementType();
-            if (!isSizedStruct(ty))
+            if (!isSizedStruct(ty) && !isSizedArray(ty))
                 return false;
 
             for (auto &index : Gep->indices())
@@ -1061,7 +1094,7 @@ namespace
                     }
                 }
 #if CONFIG_ENABLE_MERGE_OPTIMIZATION
-                if (dom > 1 || weight > 4)
+                if (dom > 1 || weight > 2)
                     partialCheck.push_back(std::make_pair(key, value));
                 else
                     newRuntimeCheck.append(*value);
@@ -1095,7 +1128,7 @@ namespace
                         if (i != j)
                         {
                             if (auto J = dyn_cast<GetElementPtrInst>((*value)[j])) {
-                                if (DT->dominates(J, I) || PDT->dominates(I, J))
+                                if (DT->dominates(J, I) || PDT->dominates(J, I))
                                 {
                                     if (I->getPointerOperand() == J->getPointerOperand()) 
                                     {
