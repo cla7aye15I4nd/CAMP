@@ -632,7 +632,8 @@ namespace
         {
             Value *S = findSource(Ptr);
             if (isa<GlobalValue>(S) ||
-                isa<AllocaInst>(S))
+                isa<AllocaInst>(S) ||
+                isa<Constant>(S))
                 return false;
 
             if (Visit.count(S))
