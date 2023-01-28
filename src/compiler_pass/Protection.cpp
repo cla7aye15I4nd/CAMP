@@ -503,8 +503,7 @@ namespace
                 return false;
             if (isa<PHINode>(V))
                 return false;
-            dbgs() << *V << "\n";
-
+            
             return true;
         }
 
@@ -724,7 +723,6 @@ namespace
                     if (fty->getNumParams() >= 1) {
                         if (auto fpty = dyn_cast<PointerType>(fty->getParamType(0))) {
                             if (fpty->getPointerElementType()->isStructTy()) {
-                                dbgs() << "isVirtualTable: " << *Gep << "\n";
                                 return true;
                             }
                         }
