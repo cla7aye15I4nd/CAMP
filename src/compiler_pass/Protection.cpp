@@ -61,6 +61,7 @@ namespace
 #endif
         // Type Utils
         Type *voidType;
+        Type *int8Type;
         Type *int32Type;
         Type *int64Type;
         Type *voidPointerType;
@@ -171,6 +172,7 @@ namespace
         {
             LLVMContext &context = M->getContext();
             voidType = Type::getVoidTy(context);
+            int8Type = Type::getInt8Ty(context);
             int32Type = Type::getInt32Ty(context);
             int64Type = Type::getInt64Ty(context);
             voidPointerType = Type::getInt8PtrTy(context, 0);
@@ -404,7 +406,7 @@ namespace
 
                 irBuilder.SetInsertPoint(SplitBlockAndInsertIfThen(valueNotOnStack, InsertPoint, false));
                 auto if_end = irBuilder.CreateCall(M->getFunction(__GET_CHUNK_RANGE), {ptr, base_ptr});
-                auto if_base = irBuilder.CreateLoad(base_ptr);
+                auto if_base = irBuilder.CreateLoad(int64Type, base_ptr);
 
                 irBuilder.SetInsertPoint(InsertPoint);
                 PHINode* base_phi = irBuilder.CreatePHI(int64Type, 2);
@@ -419,7 +421,7 @@ namespace
                 end = end_phi;
             } else {
                 end = irBuilder.CreateCall(M->getFunction(__GET_CHUNK_RANGE), {ptr, base_ptr});
-                base = irBuilder.CreateLoad(base_ptr);
+                base = irBuilder.CreateLoad(int64Type, base_ptr);
             }
                 
 
@@ -950,7 +952,7 @@ namespace
         {
             IRBuilder<> irBuilder(CI);
             auto BC = irBuilder.CreatePointerCast(Ptr, voidPointerType);
-            auto GEP = irBuilder.CreateGEP(BC, irBuilder.CreatePointerCast(Len, int64Type));
+            auto GEP = irBuilder.CreateGEP(int8Type, BC, irBuilder.CreatePointerCast(Len, int64Type));
 
             if (auto I = dyn_cast<Instruction>(BC))
                 auxiliary.insert(I);
