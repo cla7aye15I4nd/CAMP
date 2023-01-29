@@ -505,8 +505,7 @@ namespace
                 return false;
             if (isa<PHINode>(V))
                 return false;
-            dbgs() << *V << "\n";
-
+            
             return true;
         }
 
@@ -635,7 +634,8 @@ namespace
         {
             Value *S = findSource(Ptr);
             if (isa<GlobalValue>(S) ||
-                isa<AllocaInst>(S))
+                isa<AllocaInst>(S) ||
+                isa<Constant>(S))
                 return false;
 
             if (Visit.count(S))
@@ -726,7 +726,6 @@ namespace
                     if (fty->getNumParams() >= 1) {
                         if (auto fpty = dyn_cast<PointerType>(fty->getParamType(0))) {
                             if (fpty->getPointerElementType()->isStructTy()) {
-                                dbgs() << "isVirtualTable: " << *Gep << "\n";
                                 return true;
                             }
                         }
