@@ -23,6 +23,7 @@ fi
 # otherwise some analysis methods cannot be enabled.
 # But over-optimization (O2 or higher) can lead to changes in semantics.
 exec clang++ -g -O1 -Xclang -load -Xclang ${BASE}/build/src/compiler_pass/libProtectionPass.so \
+        -flegacy-pass-manager \
         "$@" \
         ${FLAGS} \
 	    -Wl,-rpath,${BASE}/build/src/safe_tcmalloc/tcmalloc \
