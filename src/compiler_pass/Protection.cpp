@@ -1117,8 +1117,6 @@ namespace
                 InsertPoint = &(F->getEntryBlock().front());
 
 #if CONFIG_ENABLE_REMOVE_REDUNDANT_OPTIMIZATION
-            IRBuilder<TargetFolder> irBuilder(InsertPoint->getParent(), BasicBlock::iterator(InsertPoint->getIterator()), TargetFolder(*DL));
-
             SmallVector<Instruction *, 16> newvalue;
             for (size_t i = 0; i < value->size(); ++i)
             {
@@ -1136,10 +1134,9 @@ namespace
                                         if (isSizedStruct(I->getType()->getPointerElementType())) {
                                             Value *Iindex = GetSingleIndex(I);
                                             Value *Jindex = GetSingleIndex(J);
-                                            irBuilder.SetInsertPoint(J);
-                                            auto Offset = irBuilder.CreateSub(Jindex, Iindex);
-                                            auto OffsetRange = SE->getSignedRange(SE->getSCEV(Offset));
-                                            if (!OffsetRange.getSignedMin().isNegative())
+                                            auto IRange = SE->getSignedRange(SE->getSCEV(Iindex));
+                                            auto JRange = SE->getSignedRange(SE->getSCEV(Jindex));
+                                            if (JRange.getUnsignedMin().uge(IRange.getUnsignedMax()))
                                             {
                                                 optimized = true;
                                                 break;
@@ -1149,10 +1146,9 @@ namespace
                                         {
                                             Value *Iindex = GetSingleIndex(I);
                                             Value *Jindex = GetSingleIndex(J);
-                                            irBuilder.SetInsertPoint(J);
-                                            auto Offset = irBuilder.CreateSub(Jindex, Iindex);
-                                            auto OffsetRange = SE->getSignedRange(SE->getSCEV(Offset));
-                                            if (!OffsetRange.getSignedMin().isNegative())
+                                            auto IRange = SE->getSignedRange(SE->getSCEV(Iindex));
+                                            auto JRange = SE->getSignedRange(SE->getSCEV(Jindex));
+                                            if (JRange.getUnsignedMin().uge(IRange.getUnsignedMax()))
                                             {
                                                 optimized = true;
                                                 break;
