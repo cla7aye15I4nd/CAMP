@@ -1016,23 +1016,29 @@ struct VProtectionPass : public FunctionPass {
                   if (isSizedStruct(I->getType()->getPointerElementType())) {
                     Value *Iindex = GetSingleIndex(I);
                     Value *Jindex = GetSingleIndex(J);
-                    irBuilder.SetInsertPoint(J);
-                    auto Offset = irBuilder.CreateSub(Jindex, Iindex);
-                    auto OffsetRange = SE->getSignedRange(SE->getSCEV(Offset));
-                    if (!OffsetRange.getSignedMin().isNegative()) {
-                      optimized = true;
-                      break;
+                    if (Iindex->getType() == Jindex->getType()) {
+                      irBuilder.SetInsertPoint(J);
+                      auto Offset = irBuilder.CreateSub(Jindex, Iindex);
+                      auto OffsetRange =
+                          SE->getSignedRange(SE->getSCEV(Offset));
+                      if (!OffsetRange.getSignedMin().isNegative()) {
+                        optimized = true;
+                        break;
+                      }
                     }
                   }
                   if (I->getNumIndices() == 1 && J->getNumIndices() == 1) {
                     Value *Iindex = GetSingleIndex(I);
                     Value *Jindex = GetSingleIndex(J);
-                    irBuilder.SetInsertPoint(J);
-                    auto Offset = irBuilder.CreateSub(Jindex, Iindex);
-                    auto OffsetRange = SE->getSignedRange(SE->getSCEV(Offset));
-                    if (!OffsetRange.getSignedMin().isNegative()) {
-                      optimized = true;
-                      break;
+                    if (Iindex->getType() == Jindex->getType()) {
+                      irBuilder.SetInsertPoint(J);
+                      auto Offset = irBuilder.CreateSub(Jindex, Iindex);
+                      auto OffsetRange =
+                          SE->getSignedRange(SE->getSCEV(Offset));
+                      if (!OffsetRange.getSignedMin().isNegative()) {
+                        optimized = true;
+                        break;
+                      }
                     }
                   }
                 }
