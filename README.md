@@ -17,3 +17,9 @@
 mkdir build && cd build
 cmake .. && make
 ```
+## Usage
+
+```bash
+tools/vcc <compile options>
+tools/v++ <compile options>
+```
