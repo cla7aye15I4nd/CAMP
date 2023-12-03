@@ -10,6 +10,8 @@ CAMP is a new sanitizer for detecting and capturing heap memory corruption. CAMP
 
 [CAMP's allocator](https://github.com/Markakd/safe_tcmalloc) is built on tcmalloc. Users can use `python3 menuconfig.py` to modify the behavior when the allocator detects an error.
 
+CAMP has modified tcmalloc, with the most significant changes being in the cache design and the addition of a checking function. These modifications can be found at https://github.com/Markakd/safe_tcmalloc/blob/main/tcmalloc/tcmalloc.cc.
+
 [CAMP's compiler](src/compiler_pass) is built on top of the LLVM12 compiler framework. We implement the instrumentation and optimization within an LLVM pass, loadable by Clang. To defend against heap overflow, it instruments all pointer arithmetic and type-casting instructions. Users can enable or disable specific optimizations or checks by changing the value in [config.h](src/compiler_pass/config.h).
 
 
