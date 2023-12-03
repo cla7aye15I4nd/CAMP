@@ -14,6 +14,10 @@ CAMP has modified tcmalloc, with the most significant changes being in the cache
 
 [CAMP's compiler](src/compiler_pass) is built on top of the LLVM12 compiler framework. We implement the instrumentation and optimization within an LLVM pass, loadable by Clang. To defend against heap overflow, it instruments all pointer arithmetic and type-casting instructions. Users can enable or disable specific optimizations or checks by changing the value in [config.h](src/compiler_pass/config.h).
 
+For each optimization's implementation, we point out its location in the code:
+- Optimizing range checks with type information [src](src/compiler_pass/Protection.cpp#L548)
+- Removing Redundant Instructions [src](src/compiler_pass/Protection.cpp#L993)
+- Merging Runtime Calls [src](src/compiler_pass/Protection.cpp#L980)
 
 ## Prerequisite
 
