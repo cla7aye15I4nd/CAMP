@@ -1,5 +1,3 @@
-![](https://www.usenix.org/sites/default/files/usenix_logo_300x150_neat_2.png)
-
 ![](https://secartifacts.github.io/usenixsec2024/usenixbadges-available.png)
 ![](https://secartifacts.github.io/usenixsec2024/usenixbadges-functional.png)
 ![](https://secartifacts.github.io/usenixsec2024/usenixbadges-reproduced.png)
