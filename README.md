@@ -1,7 +1,10 @@
+![](https://www.usenix.org/sites/default/files/usenix_logo_300x150_neat_2.png)
+
+![](https://secartifacts.github.io/usenixsec2024/usenixbadges-available.png)
+![](https://secartifacts.github.io/usenixsec2024/usenixbadges-functional.png)
+![](https://secartifacts.github.io/usenixsec2024/usenixbadges-reproduced.png)
+
 # CAMP: Compiler and Allocator-based Heap Memory Protection
-
-*Zhenpeng Lin, Zheng Yu, Ziyi Guo, Simone Campanoni, Peter Dinda, and Xinyu Xing*
-
 
 ## Overview
 
@@ -50,3 +53,16 @@ These commands allow you to utilize the `vcc` and `v++` tools included with CAMP
 ## Experiments
 
 [CAMP Experiment](https://github.com/cla7aye15I4nd/camp-experiment) include all documents and scripts that we used in evaluation and artfact.
+
+## Bibtex
+```
+@inproceedings {294533,
+	title = {{CAMP}: Compiler and Allocator-based Heap Memory Protection},
+	booktitle = {33rd USENIX Security Symposium (USENIX Security 24)},
+	year = {2024},
+	address = {Philadelphia, PA},
+	url = {https://www.usenix.org/conference/usenixsecurity24/presentation/lin},
+	publisher = {USENIX Association},
+	month = aug
+}
+```
