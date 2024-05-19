@@ -1,6 +1,6 @@
-![](https://secartifacts.github.io/usenixsec2024/usenixbadges-available.png)
-![](https://secartifacts.github.io/usenixsec2024/usenixbadges-functional.png)
-![](https://secartifacts.github.io/usenixsec2024/usenixbadges-reproduced.png)
+![](https://raw.githubusercontent.com/cla7aye15I4nd/cla7aye15i4nd.github.io/main/static/usenixbadges-available.png)
+![](https://raw.githubusercontent.com/cla7aye15I4nd/cla7aye15i4nd.github.io/main/static/usenixbadges-available.png)
+![](https://raw.githubusercontent.com/cla7aye15I4nd/cla7aye15i4nd.github.io/main/static/usenixbadges-reproduced.png)
 
 # CAMP: Compiler and Allocator-based Heap Memory Protection
 
