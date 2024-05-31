@@ -54,13 +54,10 @@ These commands allow you to utilize the `vcc` and `v++` tools included with CAMP
 
 ## Bibtex
 ```
-@inproceedings {294533,
-	title = {{CAMP}: Compiler and Allocator-based Heap Memory Protection},
-	booktitle = {33rd USENIX Security Symposium (USENIX Security 24)},
-	year = {2024},
-	address = {Philadelphia, PA},
-	url = {https://www.usenix.org/conference/usenixsecurity24/presentation/lin},
-	publisher = {USENIX Association},
-	month = aug
+@inproceedings{lin2024camp,
+    title = {{CAMP}: Compiler and Allocator-based Heap Memory Protection},
+    author={Lin, Zhenpeng and Yu, Zheng and Guo, Ziyi and Campanoni, Simone and Dinda, Peter and Xing, Xinyu},
+    booktitle = {33rd USENIX Security Symposium (USENIX Security 24)},
+    year = {2024},
 }
 ```
